@@ -262,9 +262,20 @@ class Game:
                         el.reset(int(a.x) - 8, int(a.y))
 
         # ---- Rain update (index-based, no object allocation) ----
+        ship_x = self.ship.x; ship_y = self.ship.y
         for i in range(_RAIN_MAX):
             if _rain_live[i]:
                 _rain_y[i] += _rain_spd[i]
+                
+                # Ship collision check (penalty for getting wet!)
+                dx = _rain_x[i] - ship_x
+                dy = _rain_y[i] - ship_y
+                if dx*dx + dy*dy < 144: # ~12px hit radius
+                    self.score = max(0, self.score - 1)
+                    _rain_live[i] = False
+                    self.spawn_particles(_rain_x[i], _rain_y[i], 2, is_water=True)
+                    continue
+
                 if _rain_y[i] > 240:
                     self.spawn_particles(_rain_x[i], 240,
                                          random.randint(2, 4), is_water=True)
