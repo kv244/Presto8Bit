@@ -214,6 +214,7 @@ class Game:
         # BUT only if we aren't in the "just killed a cloud" recovery window
         # danger overrides the recovery window to allow emergency nuking
         has_clouds = len(self.env.clouds) > 0
+        trouble = len(self.env.houses) < 6 and has_clouds and self.cloud_revert_timer == 0
         # BOSS CRITICAL: village almost gone during boss fight
         is_critical = (self.score < 25 or (self.boss_active and len(self.env.houses) < 4))
         danger = is_critical and not self.nuke_used and has_clouds
