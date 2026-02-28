@@ -254,9 +254,17 @@ class Game:
         # All aliens fire back — each active alien has a small frame chance
         for a in ALIEN_POOL.active_objects():
             if a.active:
-                # Normal aliens fire at 0.3%, boss aliens fire at 6.0% (bullet hell)
-                fire_chance = 0.94 if a.is_boss else 0.997
-                if random.random() > fire_chance:
+                # Base probabilities
+                prob = 0.06 if a.is_boss else 0.003
+                
+                # Homing aliens fire wildly as they approach
+                if a.target:
+                    dx = a.x - ship_x; dy = a.y - ship_y
+                    dist_sq = dx*dx + dy*dy
+                    # If within ~150px, triple the fire rate; otherwise 1.5x
+                    prob *= 3.0 if dist_sq < 22500 else 1.5
+                
+                if random.random() < prob:
                     el = ENEMY_LASER_POOL.get()
                     if el is not None:
                         el.reset(int(a.x) - 8, int(a.y))
