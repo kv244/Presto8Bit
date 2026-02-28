@@ -61,8 +61,10 @@ class Alien:
             if self.t > 400:
                 self.active = False
             else:
-                dx = self.target.x - self.x
-                dy = self.target.y - self.y
+                tx = self.target.x + getattr(self.target, 'ox', 0)
+                ty = self.target.y + getattr(self.target, 'oy', 0)
+                dx = tx - self.x
+                dy = ty - self.y
                 dist = math.sqrt(dx*dx + dy*dy)
                 if dist > 0:
                     ms = self.move_speed

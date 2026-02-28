@@ -142,10 +142,10 @@ class Game:
         )
 
     def spawn_boss_swarm(self):
-        """Spawn 16 boss aliens in a perfect contracting ring around the ship."""
+        """Spawn 16 boss aliens in a perfect contracting ring centered at screenspace center."""
         self.score += 500  # Extra life points for the boss fight
-        self.ship.x = 280  # Move to the far right
-        ship_x, ship_y = self.ship.x, self.ship.y
+        self.ship.x = 160  # Center for visibility
+        cx, cy = 160, 120
         radius = 120
         count  = 16
         for i in range(count):
@@ -153,8 +153,8 @@ class Game:
             if a is None:
                 break
             angle = (2 * math.pi * i) / count
-            sx = int(ship_x + math.cos(angle) * radius)
-            sy = int(ship_y + math.sin(angle) * radius)
+            sx = int(cx + math.cos(angle) * radius)
+            sy = int(cy + math.sin(angle) * radius)
             a.reset(
                 (sx, sy), (0, 0), (0, 0),
                 speed=1,          
@@ -264,7 +264,7 @@ class Game:
                     self.ship.x += 4 if self.ship.x < tx else -4
         else:
             # Return to home position (left side, UNLESS in boss fight)
-            home_x = 280 if self.boss_active else 45
+            home_x = 160 if self.boss_active else 45
             if abs(self.ship.x - home_x) > 2:
                 self.ship.x += 2 if self.ship.x < home_x else -2
 
