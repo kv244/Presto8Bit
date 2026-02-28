@@ -241,16 +241,18 @@ class Game:
         if self.boss_active:
             # SUPER FIRE: low threshold, 5-way spread
             fire_threshold = max(0.35, 0.80 - alien_count * 0.02 + fire_rate_penalty)
-            if alien_count > 0 and random.random() > fire_threshold:
+            # If aiming up, we fire much more often and in a massive spread
+            if self.ship.aim_up: fire_threshold = 0.30
+
+            if (self.ship.aim_up or alien_count > 0) and random.random() > fire_threshold:
                 sx = self.ship.x; sy = self.ship.y
                 # Each shot gets a small random deflection based on miss_factor
                 deflect = lambda: (random.random() - 0.5) * miss_factor
                 
                 if self.ship.aim_up:
-                    # Fire UP at clouds (wide spread)
-                    self.fire_laser(sx,      sy - 10, vx=0, vy=-12, is_up=True)
-                    self.fire_laser(sx - 15, sy - 5,  vx=0, vy=-12, is_up=True)
-                    self.fire_laser(sx + 15, sy - 5,  vx=0, vy=-12, is_up=True)
+                    # Cloud Eraser: Massive 7-way fan
+                    for offset in [-45, -30, -15, 0, 15, 30, 45]:
+                        self.fire_laser(sx + offset, sy - 10, vx=0, vy=-12, is_up=True)
                 else:
                     self.fire_laser(sx + 10, sy,       vy=deflect())          # centre
                     self.fire_laser(sx + 5,  sy - 15,  vy=deflect())   # spread up
@@ -274,11 +276,16 @@ class Game:
         else:
             base_threshold = 0.85 if is_danger else 0.96
             fire_threshold = max(0.60, base_threshold - alien_count * 0.02 + fire_rate_penalty)
-            if alien_count > 0 and random.random() > fire_threshold:
+            # Upward fire is much faster even in regular mode
+            if self.ship.aim_up: fire_threshold = 0.50
+
+            if (self.ship.aim_up or alien_count > 0) and random.random() > fire_threshold:
                 deflect = lambda: (random.random() - 0.5) * miss_factor
                 if self.ship.aim_up:
-                    # Fire UP at clouds
-                    self.fire_laser(self.ship.x, self.ship.y - 10, vx=0, vy=-12, is_up=True)
+                    # Fire UP at clouds (Massive 3-way spread)
+                    self.fire_laser(self.ship.x,      self.ship.y - 10, vx=0, vy=-12, is_up=True)
+                    self.fire_laser(self.ship.x - 15, self.ship.y - 5,  vx=0, vy=-12, is_up=True)
+                    self.fire_laser(self.ship.x + 15, self.ship.y - 5,  vx=0, vy=-12, is_up=True)
                 else:
                     # Fire RIGHT at aliens
                     self.fire_laser(self.ship.x + 10, self.ship.y, vy=deflect())
