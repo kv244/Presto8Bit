@@ -105,8 +105,9 @@ class Environment:
             d.circle(sx, 50, 12)
         else:
             sun_y = 40 + int(self.trans * 70)
-            d.set_pen(self.pen_sun_o); d.circle(260, sun_y, 26)
-            d.set_pen(self.pen_sun_i); d.circle(260, sun_y, 18)
+            sx = int((320 * 0.8 - t * 0.1) % 320)
+            d.set_pen(self.pen_sun_o); d.circle(sx, sun_y, 26)
+            d.set_pen(self.pen_sun_i); d.circle(sx, sun_y, 18)
 
         # Clouds (use cached per-cloud pens)
         for idx, c in enumerate(self.clouds):
@@ -168,6 +169,19 @@ class Environment:
                     return True
         return False
 
+    def get_nearest_cloud_x(self, ship_x, t):
+        """Returns the X coordinate of the cloud horizontally closest to ship_x."""
+        if not self.clouds: return None
+        best_x = None
+        min_dist = 9999
+        for c in self.clouds:
+            cx = int((c[0] - t * c[2]) % 340) - 20
+            dist = abs(cx - ship_x)
+            if dist < min_dist:
+                min_dist = dist
+                best_x = cx
+        return best_x
+
     def check_cloud_damage(self, x, y, t):
         """Checks if a point (x, y) hit any cloud."""
         for i in range(len(self.clouds) - 1, -1, -1):
@@ -181,8 +195,20 @@ class Environment:
                 if c[4] <= 0:
                     self.clouds.pop(i)
                     self.cloud_pens.pop(i)
-                return True
-        return False
+                    return 2 # KILLED
+                return 1 # HIT
+        return 0 # MISS
+
+    def get_celestial_coords(self, t):
+        """Returns the current screen (x, y) for the sun or moon."""
+        if self.is_night:
+            mx = int((320 * 0.7 - t * 0.2) % 320)
+            my = 50
+            return (mx, my)
+        else:
+            sx = int((320 * 0.8 - t * 0.1) % 320)
+            sy = 40 + int(self.trans * 70)
+            return (sx, sy)
 
     def check_celestial_damage(self, x, y, t):
         """Checks if a point (x, y) hit the sun or moon."""
@@ -192,7 +218,7 @@ class Environment:
             dx = x - mx; dy = y - my
             return (dx*dx + dy*dy) < 144
         else:
-            sx = 260
+            sx = int((320 * 0.8 - t * 0.1) % 320)
             sy = 40 + int(self.trans * 70)
             dx = x - sx; dy = y - sy
             return (dx*dx + dy*dy) < 676

@@ -73,6 +73,7 @@ class Game:
         # Nuclear Bomb state
         self.nuke_used = False
         self.nuke_anim_timer = 0
+        self.cloud_revert_timer = 0
 
         # 4. Pre-cache pens (avoids heap allocation every frame)
         d = self.display
@@ -184,17 +185,36 @@ class Game:
         if self.pause_timer > 0:
             return
 
+        # Decrement all global timers
+        if self.cloud_revert_timer > 0: self.cloud_revert_timer -= 1
+        if self.impact_timer > 0:        self.impact_timer -= 1
+        if self.explode_timer > 0:       self.explode_timer -= 1
+        if self.nuke_anim_timer > 0:      self.nuke_anim_timer -= 1
+
         # Environment & ship
         self.env.update(self.t % (self.PHASE_LEN * 4), self.PHASE_LEN)
         self.ship.boss_mode = self.boss_active
         # Ship aims up if village is in trouble and clouds exist
-        # OR if ship is in serious danger (< 25 score) to allow nuke
-        trouble = len(self.env.houses) < 6 and len(self.env.clouds) > 0
+        # BUT only if we aren't in the "just killed a cloud" recovery window
+        # danger overrides the recovery window to allow emergency nuking
+        trouble = len(self.env.houses) < 6 and len(self.env.clouds) > 0 and self.cloud_revert_timer == 0
         danger  = self.score < 25 and not self.nuke_used
         self.ship.aim_up = trouble or danger
         self.ship.update(self.t)
         ship_x = self.ship.x
         ship_y = self.ship.y
+
+        # Autonomous movement while aiming up: Glide under the target
+        if self.ship.aim_up:
+            tx = ship_x
+            if danger:
+                tx, _ = self.env.get_celestial_coords(self.t)
+            elif trouble:
+                tx = self.env.get_nearest_cloud_x(ship_x, self.t)
+
+            if tx is not None:
+                if abs(self.ship.x - tx) > 3:
+                    self.ship.x += 4 if self.ship.x < tx else -4
 
         # Spawning — suppressed during boss fight
         if not self.boss_active:
@@ -251,8 +271,15 @@ class Game:
                 
                 if self.ship.aim_up:
                     # Cloud Eraser: Massive 7-way fan
+                    # If in danger, one laser targets the celestial body (Sun/Moon)
+                    cx, cy = self.env.get_celestial_coords(self.t)
+                    sx, sy = self.ship.x, self.ship.y
                     for offset in [-45, -30, -15, 0, 15, 30, 45]:
                         self.fire_laser(sx + offset, sy - 10, vx=0, vy=-12, is_up=True)
+                    if danger:
+                        # Seeker laser: targets celestial body X
+                        vx = float(cx - sx) * -12.0 / (cy - sy) if cy != sy else 0
+                        self.fire_laser(sx, sy - 10, vx=vx, vy=-12, is_up=True)
                 else:
                     self.fire_laser(sx + 10, sy,       vy=deflect())          # centre
                     self.fire_laser(sx + 5,  sy - 15,  vy=deflect())   # spread up
@@ -264,13 +291,10 @@ class Game:
             else:
                 if self.nuke_anim_timer > 0:
                     self.buzzer.set_tone(random.randint(50, 150))
-                    self.nuke_anim_timer -= 1
                 elif self.impact_timer > 0:
                     self.buzzer.set_tone(random.randint(50, 250))
-                    self.impact_timer -= 1
                 elif self.explode_timer > 0:
                     self.buzzer.set_tone(random.randint(2000, 3000))
-                    self.explode_timer -= 1
                 else:
                     self.buzzer.set_tone(0)
         else:
@@ -282,10 +306,15 @@ class Game:
             if (self.ship.aim_up or alien_count > 0) and random.random() > fire_threshold:
                 deflect = lambda: (random.random() - 0.5) * miss_factor
                 if self.ship.aim_up:
-                    # Fire UP at clouds (Massive 3-way spread)
-                    self.fire_laser(self.ship.x,      self.ship.y - 10, vx=0, vy=-12, is_up=True)
-                    self.fire_laser(self.ship.x - 15, self.ship.y - 5,  vx=0, vy=-12, is_up=True)
-                    self.fire_laser(self.ship.x + 15, self.ship.y - 5,  vx=0, vy=-12, is_up=True)
+                    # Fire UP at clouds (Massive 3-way spread + optional seeker)
+                    sx, sy = self.ship.x, self.ship.y
+                    self.fire_laser(sx,      sy - 10, vx=0, vy=-12, is_up=True)
+                    self.fire_laser(sx - 15, sy - 5,  vx=0, vy=-12, is_up=True)
+                    self.fire_laser(sx + 15, sy - 5,  vx=0, vy=-12, is_up=True)
+                    if danger:
+                        cx, cy = self.env.get_celestial_coords(self.t)
+                        vx = float(cx - sx) * -12.0 / (cy - sy) if cy != sy else 0
+                        self.fire_laser(sx, sy - 10, vx=vx, vy=-12, is_up=True)
                 else:
                     # Fire RIGHT at aliens
                     self.fire_laser(self.ship.x + 10, self.ship.y, vy=deflect())
@@ -297,13 +326,10 @@ class Game:
             else:
                 if self.nuke_anim_timer > 0:
                     self.buzzer.set_tone(random.randint(50, 150))
-                    self.nuke_anim_timer -= 1
                 elif self.impact_timer > 0:
                     self.buzzer.set_tone(random.randint(50, 250))
-                    self.impact_timer -= 1
                 elif self.explode_timer > 0:
                     self.buzzer.set_tone(random.randint(2000, 3000))
-                    self.explode_timer -= 1
                 else:
                     self.buzzer.set_tone(0)
 
@@ -379,14 +405,20 @@ class Game:
 
             # Cloud/Celestial check (if firing up)
             if l.is_up:
-                if self.env.check_cloud_damage(lx, ly, self.t):
+                res = self.env.check_cloud_damage(lx, ly, self.t)
+                if res:
+                    self.score += 10 # Score for hitting/destroying cloud
                     self.explode_timer = 2
                     self.spawn_particles(lx, ly, 4, is_water=True)
+                    if res == 2:
+                        # CLOUD DESTROYED: trigger recovery window
+                        self.cloud_revert_timer = 100
                     l.active = False
                     continue
                 # NUKE CHECK: Shoot the sun/moon to wipe the screen
                 if self.score < 25 and not self.nuke_used:
                     if self.env.check_celestial_damage(lx, ly, self.t):
+                        self.score += 100 # Huge bonus for nuclear trigger
                         print("Nuclear")
                         self.nuke_used = True
                         self.nuke_anim_timer = 60
