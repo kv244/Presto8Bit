@@ -4,7 +4,7 @@
 
 from presto import Presto, Buzzer
 from machine import Pin
-import time, random, gc, micropython
+import time, random, gc, micropython, math
 from utils import fast_dimmer
 from entities import ALIEN_POOL, LASER_POOL, PARTICLE_POOL
 from environment import Environment
@@ -58,6 +58,11 @@ class Game:
         self.impact_timer  = 0
         self.explode_timer = 0
 
+        # Boss fight state
+        self.boss_active        = False
+        self.boss_next_threshold = 100   # first boss triggers at score 100
+        self.boss_defeat_timer  = 0      # frames to show "BOSS DEFEATED!"
+
         # 4. Pre-cache pens (avoids heap allocation every frame)
         d = self.display
         self.pen_shadow    = d.create_pen(30, 0, 50)
@@ -70,6 +75,12 @@ class Game:
         self.pen_alien_glow= d.create_pen(100, 255, 100)
         self.pen_halo      = d.create_pen(60, 90, 120)
         self.pen_black     = 0
+        # Boss-specific pens
+        self.pen_boss_border = d.create_pen(220, 0, 0)
+        self.pen_boss_hud    = d.create_pen(255, 60, 0)
+        self.pen_boss_shadow = d.create_pen(80, 0, 0)
+        self.pen_boss_alien_body = d.create_pen(220, 30, 30)
+        self.pen_boss_alien_glow = d.create_pen(255, 80, 80)
 
         # 5. High Score persistence
         try:
@@ -85,9 +96,11 @@ class Game:
     # Spawn helpers — use pools, never append()
     # -----------------------------------------------------------------------
     def spawn_alien(self):
+        if self.boss_active:
+            return  # suppress normal spawning during boss fight
         a = ALIEN_POOL.get()
         if a is None:
-            return  # pool full, skip this spawn
+            return
         sy = random.randint(40, 160)
         tx = -50 if random.random() > 0.3 else 370
         is_seeker = self.ship if random.random() > 0.85 else None
@@ -98,6 +111,26 @@ class Game:
             random.randint(2, 5),
             is_seeker
         )
+
+    def spawn_boss_swarm(self):
+        """Spawn 12 boss aliens in a ring on the right side, all homing on the ship."""
+        cx, cy = 310, 120
+        radius = 90
+        count  = 12
+        for i in range(count):
+            a = ALIEN_POOL.get()
+            if a is None:
+                break
+            angle = (2 * math.pi * i) / count
+            sx = int(cx + math.cos(angle) * radius)
+            sy = int(cy + math.sin(angle) * radius)
+            a.reset(
+                (sx, sy), (0, 0), (0, 0),
+                speed=1,          # t clock ticks slowly so they live 400 frames
+                target=self.ship,
+                is_boss=True,
+                move_speed=3.5    # much faster than normal seekers (1.8)
+            )
 
     def fire_laser(self, x, y):
         l = LASER_POOL.get()
@@ -143,38 +176,79 @@ class Game:
         self.env.update(self.t % (self.PHASE_LEN * 4), self.PHASE_LEN)
         self.ship.update(self.t)
 
-        # Spawning
-        spawn_threshold = 0.94
-        if self.score > 300:
-            spawn_threshold = max(0.70, 0.94 - ((self.score - 300) * 0.0004))
-        if random.random() > spawn_threshold:
-            self.spawn_alien()
+        # Spawning — suppressed during boss fight
+        if not self.boss_active:
+            spawn_threshold = 0.94
+            if self.score > 300:
+                spawn_threshold = max(0.70, 0.94 - ((self.score - 300) * 0.0004))
+            if random.random() > spawn_threshold:
+                self.spawn_alien()
         if random.random() > 0.60:
             _rain_spawn()
 
-        # Firing — rate scales with how many aliens are on screen
+        # Boss fight trigger
+        if (not self.boss_active and
+                self.score >= self.boss_next_threshold and
+                self.boss_defeat_timer == 0):
+            self.boss_active = True
+            self.spawn_boss_swarm()
+
+        # Boss fight end check
+        if self.boss_active:
+            boss_alive = any(a.active and a.is_boss for a in ALIEN_POOL.active_objects())
+            if not boss_alive:
+                self.boss_active = False
+                self.score += 50                       # bonus for clearing the swarm
+                self.boss_next_threshold = self.score + 200  # next boss further away
+                self.boss_defeat_timer = 180           # show "BOSS DEFEATED!" for ~3s
+
+        # Boss defeat message countdown
+        if self.boss_defeat_timer > 0:
+            self.boss_defeat_timer -= 1
+
+        # Firing — rate scales with aliens on screen; super-fire mode during boss
         alien_count = sum(1 for a in ALIEN_POOL.active_objects() if a.active)
-        is_danger = self.score <= 50
-        base_threshold = 0.85 if is_danger else 0.96
-        # Each alien on-screen lowers the threshold by 0.02 (fires more often),
-        # floored at 0.60 so it never becomes a non-stop bullet stream.
-        fire_threshold = max(0.60, base_threshold - alien_count * 0.02)
-        if alien_count > 0 and random.random() > fire_threshold:
-            self.fire_laser(self.ship.x + 10, self.ship.y)
-            if is_danger:
-                self.fire_laser(self.ship.x, self.ship.y - 15)
-                self.fire_laser(self.ship.x, self.ship.y + 15)
-            self.ship.recoil = 5
-            self.buzzer.set_tone(1500 if is_danger else 1200)
-        else:
-            if self.impact_timer > 0:
-                self.buzzer.set_tone(random.randint(50, 250))
-                self.impact_timer -= 1
-            elif self.explode_timer > 0:
-                self.buzzer.set_tone(random.randint(2000, 3000))
-                self.explode_timer -= 1
+        is_danger   = self.score <= 50
+        if self.boss_active:
+            # SUPER FIRE: low threshold, 5-way spread
+            fire_threshold = max(0.35, 0.80 - alien_count * 0.02)
+            if alien_count > 0 and random.random() > fire_threshold:
+                sx = self.ship.x; sy = self.ship.y
+                self.fire_laser(sx + 10, sy)         # centre
+                self.fire_laser(sx + 5,  sy - 15)   # spread up
+                self.fire_laser(sx + 5,  sy + 15)   # spread down
+                self.fire_laser(sx,      sy - 30)   # wide up
+                self.fire_laser(sx,      sy + 30)   # wide down
+                self.ship.recoil = 5
+                self.buzzer.set_tone(1800)
             else:
-                self.buzzer.set_tone(0)
+                if self.impact_timer > 0:
+                    self.buzzer.set_tone(random.randint(50, 250))
+                    self.impact_timer -= 1
+                elif self.explode_timer > 0:
+                    self.buzzer.set_tone(random.randint(2000, 3000))
+                    self.explode_timer -= 1
+                else:
+                    self.buzzer.set_tone(0)
+        else:
+            base_threshold = 0.85 if is_danger else 0.96
+            fire_threshold = max(0.60, base_threshold - alien_count * 0.02)
+            if alien_count > 0 and random.random() > fire_threshold:
+                self.fire_laser(self.ship.x + 10, self.ship.y)
+                if is_danger:
+                    self.fire_laser(self.ship.x, self.ship.y - 15)
+                    self.fire_laser(self.ship.x, self.ship.y + 15)
+                self.ship.recoil = 5
+                self.buzzer.set_tone(1500 if is_danger else 1200)
+            else:
+                if self.impact_timer > 0:
+                    self.buzzer.set_tone(random.randint(50, 250))
+                    self.impact_timer -= 1
+                elif self.explode_timer > 0:
+                    self.buzzer.set_tone(random.randint(2000, 3000))
+                    self.explode_timer -= 1
+                else:
+                    self.buzzer.set_tone(0)
 
         # ---- Rain update (index-based, no object allocation) ----
         for i in range(_RAIN_MAX):
@@ -277,16 +351,46 @@ class Game:
             if p.active:
                 p.draw(d, self.pen_particle, self.pen_water)
 
-        # Aliens
+        # Aliens (boss aliens drawn in red)
         for a in ALIEN_POOL.active_objects():
             if a.active:
-                a.draw(d, self.pen_alien_body, self.pen_alien_glow)
+                if a.is_boss:
+                    a.draw(d, self.pen_boss_alien_body, self.pen_boss_alien_glow)
+                else:
+                    a.draw(d, self.pen_alien_body,      self.pen_alien_glow)
 
         self.ship.draw(self.env.is_night)
 
         # HUD
         self.draw_hud(f"SCORE: {self.score}", 5, 5, 2)
         self.draw_hud(f"HI: {self.high_score}", 240, 5, 2)
+
+        # Boss fight overlays
+        if self.boss_active:
+            # Flashing red border (flashes every 15 frames)
+            if (self.t // 15) % 2 == 0:
+                d.set_pen(self.pen_boss_border)
+                d.line(0, 0,   319, 0)    # top
+                d.line(0, 239, 319, 239)  # bottom
+                d.line(0, 0,   0,   239)  # left
+                d.line(319, 0, 319, 239)  # right
+            # "BOSS FIGHT!" title
+            d.set_pen(self.pen_boss_shadow)
+            d.text("BOSS FIGHT!", 87, 27, 320, 2)
+            d.set_pen(self.pen_boss_hud)
+            d.text("BOSS FIGHT!", 85, 25, 320, 2)
+            # Remaining boss count
+            boss_left = sum(1 for a in ALIEN_POOL.active_objects() if a.active and a.is_boss)
+            d.set_pen(self.pen_boss_shadow)
+            d.text(f"x{boss_left}", 162, 47, 320, 2)
+            d.set_pen(self.pen_boss_hud)
+            d.text(f"x{boss_left}", 160, 45, 320, 2)
+
+        if self.boss_defeat_timer > 0:
+            d.set_pen(self.pen_boss_shadow)
+            d.text("BOSS DEFEATED! +50", 47, 107, 320, 2)
+            d.set_pen(self.pen_boss_hud)
+            d.text("BOSS DEFEATED! +50", 45, 105, 320, 2)
 
         if self.pause_timer > 0:
             if self.game_over:

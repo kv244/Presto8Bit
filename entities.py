@@ -32,7 +32,8 @@ for _y, row in enumerate(ALIEN_SPRITE):
 # ---------------------------------------------------------------------------
 
 class Alien:
-    __slots__ = ('p0', 'p1', 'p2', 't', 'speed', 'active', 'x', 'y', 'target')
+    __slots__ = ('p0', 'p1', 'p2', 't', 'speed', 'active', 'x', 'y', 'target',
+                 'is_boss', 'move_speed')
 
     def __init__(self):
         self.active = False
@@ -40,12 +41,16 @@ class Alien:
         self.x = 0; self.y = 0
         self.p0 = (0, 0); self.p1 = (0, 0); self.p2 = (0, 0)
         self.target = None
+        self.is_boss = False
+        self.move_speed = 1.8
 
-    def reset(self, p0, p1, p2, speed, target=None):
+    def reset(self, p0, p1, p2, speed, target=None, is_boss=False, move_speed=1.8):
         self.p0 = p0; self.p1 = p1; self.p2 = p2
         self.t = 0; self.speed = speed
         self.x = p0[0]; self.y = p0[1]
         self.target = target
+        self.is_boss = is_boss
+        self.move_speed = move_speed
         self.active = True
 
     def update(self):
@@ -56,8 +61,9 @@ class Alien:
             else:
                 dx = self.target.x - self.x
                 dy = self.target.y - self.y
-                self.x += 1.8 if dx > 0 else -1.8
-                self.y += 1.8 if dy > 0 else -1.8
+                ms = self.move_speed
+                self.x += ms if dx > 0 else -ms
+                self.y += ms if dy > 0 else -ms
         else:
             self.t += self.speed
             if self.t > 256:
