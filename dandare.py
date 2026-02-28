@@ -84,6 +84,7 @@ class Game:
         self.pen_hud       = d.create_pen(255, 30, 180)
         self.pen_rain      = d.create_pen(80, 80, 90)
         self.pen_laser     = d.create_pen(0, 255, 255)
+        self.pen_up_laser  = d.create_pen(255, 255, 100) # Golden-yellow for clouds
         self.pen_particle  = d.create_pen(255, 150, 0)
         self.pen_water     = d.create_pen(160, 210, 255)
         self.pen_alien_body= d.create_pen(50, 200, 50)
@@ -565,7 +566,7 @@ class Game:
         # Lasers
         for l in LASER_POOL.active_objects():
             if l.active:
-                l.draw(d, self.pen_laser)
+                l.draw(d, self.pen_up_laser if l.is_up else self.pen_laser)
 
         # Enemy lasers
         for el in ENEMY_LASER_POOL.active_objects():
