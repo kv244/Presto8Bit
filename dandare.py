@@ -8,12 +8,14 @@ import time, random, gc, micropython, math, sys
 
 # Force reload of local modules on soft-reboot to pick up disk changes
 for mod in ['utils', 'entities', 'environment', 'ship']:
-    if mod in sys.modules: del sys.modules[mod]
+    if mod in sys.modules:
+        del sys.modules[mod]
 
 from utils import fast_dimmer
 from entities import ALIEN_POOL, LASER_POOL, PARTICLE_POOL, ENEMY_LASER_POOL
 from environment import Environment
 from ship import Ship
+print("Local modules reloaded.")
 
 # ---------------------------------------------------------------------------
 # Rain is simple enough to stay as pre-allocated plain lists.

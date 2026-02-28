@@ -1,6 +1,9 @@
 import random, time, math
 from utils import get_asm_pen
 
+# v2: added check_house_damage
+print("Loading environment.py...")
+
 class Environment:
     def __init__(self, display):
         self.display = display
