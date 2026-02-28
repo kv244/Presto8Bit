@@ -153,6 +153,19 @@ class Game:
         if l is not None:
             l.reset(x, y, vx, vy, is_up)
 
+    def get_nearest_alien(self, sx, sy):
+        best_a = None
+        min_d2 = 999999
+        for a in ALIEN_POOL.active_objects():
+            if a.active:
+                dx = a.x - sx
+                dy = a.y - sy
+                d2 = dx*dx + dy*dy
+                if d2 < min_d2:
+                    min_d2 = d2
+                    best_a = a
+        return best_a
+
     def spawn_particles(self, x, y, count, is_water=False):
         for _ in range(count):
             p = PARTICLE_POOL.get()
@@ -332,11 +345,23 @@ class Game:
                         vx = float(cx - sx) * -12.0 / (cy - sy) if cy != sy else 0
                         self.fire_laser(sx, sy - 10, vx=vx, vy=-12, is_up=True)
                 else:
-                    # Fire RIGHT at aliens
-                    self.fire_laser(ship_x + 10, ship_y, vy=deflect())
+                    # Fire RIGHT at aliens with angular aiming (-60 to 60 deg)
+                    target_a = self.get_nearest_alien(ship_x, ship_y)
+                    vx, vy = 12, deflect()
+                    if target_a:
+                        dx = target_a.x - ship_x
+                        dy = target_a.y - ship_y
+                        angle = math.atan2(dy, dx)
+                        # Clamp to -60 to 60 degrees
+                        limit = 60 * math.pi / 180
+                        angle = max(-limit, min(limit, angle))
+                        vx = 12 * math.cos(angle)
+                        vy = 12 * math.sin(angle)
+                    
+                    self.fire_laser(ship_x + 10, ship_y, vx=vx, vy=vy)
                     if is_danger:
-                        self.fire_laser(ship_x, ship_y - 15, vy=deflect())
-                        self.fire_laser(ship_x, ship_y + 15, vy=deflect())
+                        self.fire_laser(ship_x, ship_y - 15, vx=vx, vy=vy)
+                        self.fire_laser(ship_x, ship_y + 15, vx=vx, vy=vy)
                 self.ship.recoil = 5
                 self.buzzer.set_tone(1500 if is_danger else 1200)
             else:
