@@ -200,8 +200,9 @@ class Game:
         # Ship aims up if village is in trouble and clouds exist
         # BUT only if we aren't in the "just killed a cloud" recovery window
         # danger overrides the recovery window to allow emergency nuking
-        trouble = len(self.env.houses) < 6 and len(self.env.clouds) > 0 and self.cloud_revert_timer == 0
-        danger  = self.score < 25 and not self.nuke_used
+        has_clouds = len(self.env.clouds) > 0
+        trouble = len(self.env.houses) < 6 and has_clouds and self.cloud_revert_timer == 0
+        danger  = self.score < 25 and not self.nuke_used and has_clouds
         # Boss fights override upward aiming to focus on the threat
         self.ship.aim_up = (trouble or danger) if not self.boss_active else False
         self.ship.update(self.t)
