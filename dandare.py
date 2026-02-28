@@ -176,6 +176,8 @@ class Game:
         # Environment & ship
         self.env.update(self.t % (self.PHASE_LEN * 4), self.PHASE_LEN)
         self.ship.update(self.t)
+        ship_x = self.ship.x
+        ship_y = self.ship.y
 
         # Spawning — suppressed during boss fight
         if not self.boss_active:
@@ -270,7 +272,6 @@ class Game:
                         el.reset(int(a.x) - 8, int(a.y))
 
         # ---- Rain update (index-based, no object allocation) ----
-        ship_x = self.ship.x; ship_y = self.ship.y
         for i in range(_RAIN_MAX):
             if _rain_live[i]:
                 _rain_y[i] += _rain_spd[i]
@@ -290,7 +291,6 @@ class Game:
                     _rain_live[i] = False
 
         # ---- Enemy laser update + ship collision ----
-        ship_x = self.ship.x; ship_y = self.ship.y
         for el in ENEMY_LASER_POOL.active_objects():
             if not el.active:
                 continue
@@ -309,8 +309,6 @@ class Game:
                     self.pause_timer = 150
 
         # ---- Laser update + collision ----
-        ship_x = self.ship.x
-        ship_y = self.ship.y
         for l in LASER_POOL.active_objects():
             if not l.active:
                 continue
