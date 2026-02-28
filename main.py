@@ -231,7 +231,7 @@ class Application:
 
 icons = [
     Application(60, 60, file) for file in os.listdir()
-    if file.endswith(".py") and file not in ("main.py", "secrets.py", "entities.py", "environment.py", "ship.py", "utils.py")]
+    if file.endswith(".py") and file not in ("sdcard_check.py", "sdcard_explore.py", "main.py", "secrets.py", "entities.py", "environment.py", "ship.py", "utils.py")]
 
 # Take a local reference to touch for a tiny performance boost
 touch = presto.touch

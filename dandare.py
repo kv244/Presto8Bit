@@ -1,10 +1,10 @@
-# ICON deployed-code
+# ICON joystick
 # NAME Dan Dare
 # DESC Parallax pilot of the future
 
 from presto import Presto, Buzzer
 from machine import Pin
-import time, random, gc
+import time, random, gc, micropython
 from utils import fast_dimmer
 from entities import Alien, Laser, Particle
 from environment import Environment
@@ -13,7 +13,13 @@ from ship import Ship
 class Game:
     def __init__(self):
         # 1. Hardware & Engine Setup
-        self.presto = Presto(full_res=False, layers=2)
+        # Disable CTRL+C interrupts during Presto init so Thonny's post-reset
+        # CTRL+C cannot kill the WiFi/hardware setup mid-flight.
+        micropython.kbd_intr(-1)
+        try:
+            self.presto = Presto(full_res=False, layers=2)
+        finally:
+            micropython.kbd_intr(3)  # Restore CTRL+C as usual
         self.display = self.presto.display
         self.buzzer = Buzzer(Pin(43))
         
@@ -243,6 +249,5 @@ class Game:
             gc.collect()
             time.sleep(0.02)
 
-if __name__ == '__main__':
-    game = Game()
-    game.run()
+game = Game()
+game.run()
