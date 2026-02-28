@@ -231,13 +231,6 @@ class Game:
                     self.explode_timer -= 1
                 else:
                     self.buzzer.set_tone(0)
-            # Boss aliens fire back — each active boss alien has a ~0.3%/frame chance
-            for a in ALIEN_POOL.active_objects():
-                if a.active and a.is_boss:
-                    if random.random() > 0.997:
-                        el = ENEMY_LASER_POOL.get()
-                        if el is not None:
-                            el.reset(int(a.x) - 8, int(a.y))
         else:
             base_threshold = 0.85 if is_danger else 0.96
             fire_threshold = max(0.60, base_threshold - alien_count * 0.02)
@@ -257,6 +250,16 @@ class Game:
                     self.explode_timer -= 1
                 else:
                     self.buzzer.set_tone(0)
+
+        # All aliens fire back — each active alien has a small frame chance
+        for a in ALIEN_POOL.active_objects():
+            if a.active:
+                # Normal aliens fire less often, boss aliens fire more
+                fire_chance = 0.997 if a.is_boss else 0.999
+                if random.random() > fire_chance:
+                    el = ENEMY_LASER_POOL.get()
+                    if el is not None:
+                        el.reset(int(a.x) - 8, int(a.y))
 
         # ---- Rain update (index-based, no object allocation) ----
         for i in range(_RAIN_MAX):
