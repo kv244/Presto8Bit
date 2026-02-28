@@ -1,5 +1,7 @@
 # Presto Bézier Swarm: Modular Engine (Dan Dare)
 
+[![Build Status](https://github.com/kv244/Presto8Bit/actions/workflows/build.yml/badge.svg)](https://github.com/kv244/Presto8Bit/actions/workflows/build.yml)
+
 ![Screenshot 1](i1.jpg) ![Screenshot 2](i2.jpg)
 
 A high-performance, object-oriented 2D space shooter engine for the **Pimoroni Presto (RP2350)**. This project demonstrates advanced MicroPython techniques including Inline Assembly, Viper emitters, and a dual-layer hardware-composed rendering system.
@@ -41,3 +43,6 @@ Collision is calculated using squared Euclidean distance (`dx^2 + dy^2 < radius^
 1. Upload all `.py` files to the root directory of your Presto.
 2. Run `main.py` (which acts as an App menu) and launch `dandare.py`.
 3. The game polls the RTC; every hour on the hour, a Victory screen triggers and saves your High Score to `highscore.txt`.
+
+## 🛠 TODO / Future Extensibility
+* **Qwiic Joypad Support:** Integrate support for external I2C Qwiic joypads for physical ship movement controls.
