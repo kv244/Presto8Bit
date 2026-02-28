@@ -192,6 +192,7 @@ class Game:
             now = time.localtime()
             if now[3] != self.last_hour_checked and now[4] == 0:
                 self.pause_timer = 250
+                self.score += 100  # Bonus for survival!
                 self.last_hour_checked = now[3]
                 if self.score > self.high_score:
                     self.high_score = self.score
@@ -209,15 +210,11 @@ class Game:
 
         # Environment & ship
         self.env.update(self.t % (self.PHASE_LEN * 4), self.PHASE_LEN)
-        self.ship.boss_mode = self.boss_active
-        # Ship aims up if village is in trouble and clouds exist
-        # BUT only if we aren't in the "just killed a cloud" recovery window
-        # danger overrides the recovery window to allow emergency nuking
         has_clouds = len(self.env.clouds) > 0
         trouble = len(self.env.houses) < 6 and has_clouds and self.cloud_revert_timer == 0
-        # BOSS CRITICAL: village almost gone during boss fight
-        is_critical = (self.score < 25 or (self.boss_active and len(self.env.houses) < 4))
-        danger = is_critical and not self.nuke_used and has_clouds
+        # CRITICAL: village almost gone OR score low
+        is_critical = (self.score < 40 or len(self.env.houses) < 6)
+        danger = is_critical and not self.nuke_used
         
         # Ship aims up if village is in trouble or in danger
         # Boss fights normally override upward aiming UNLESS it's a critical danger
@@ -225,6 +222,9 @@ class Game:
             self.ship.aim_up = danger
         else:
             self.ship.aim_up = trouble or danger
+
+        self.ship.boss_mode = self.boss_active
+        self.ship.nuke_ready = danger
         self.ship.update(self.t)
         # Visual ship position (for collisions, firing origin AND halo)
         self.ship_vx = self.ship.x + self.ship.ox
@@ -464,7 +464,7 @@ class Game:
                     l.active = False
                     continue
                 # NUKE CHECK: Shoot the sun/moon to wipe the screen
-                if (self.score < 25 or (self.boss_active and len(self.env.houses) < 4)) and not self.nuke_used:
+                if (self.score < 40 or len(self.env.houses) < 6) and not self.nuke_used:
                     if self.env.check_celestial_damage(lx, ly, self.t):
                         self.score += 100 # Huge bonus for nuclear trigger
                         print("Nuclear")
@@ -574,7 +574,7 @@ class Game:
                 else:
                     a.draw(d, self.pen_alien_body,      self.pen_alien_glow)
 
-        self.ship.draw(self.env.is_night)
+        self.ship.draw(self.env.is_night, self.t)
 
         # HUD
         self.draw_hud(f"SCORE: {self.score}", 5, 5, 2)
