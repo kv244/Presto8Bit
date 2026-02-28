@@ -175,7 +175,8 @@ class Game:
 
         # Environment & ship
         self.env.update(self.t % (self.PHASE_LEN * 4), self.PHASE_LEN)
-        self.ship.update(self.t, self.boss_active)
+        self.ship.boss_mode = self.boss_active
+        self.ship.update(self.t)
         ship_x = self.ship.x
         ship_y = self.ship.y
 

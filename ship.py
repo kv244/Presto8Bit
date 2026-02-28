@@ -36,21 +36,21 @@ for _y, row in enumerate(SHIP_SPRITE):
         SHIP_LINES.append((start - 10, _y - 10, len(row) - 1 - 10))
 
 class Ship:
-    __slots__ = ('display', 'x', 'y', 'recoil',
+    __slots__ = ('display', 'x', 'y', 'recoil', 'boss_mode',
                  'pen_flare_day', 'pen_flare_night',
                  'pen_hull_day', 'pen_hull_night')
 
     def __init__(self, display):
         self.display = display
-        self.y = 120; self.recoil = 0; self.x = 45
+        self.y = 120; self.recoil = 0; self.x = 45; self.boss_mode = False
         # Pre-cache pens once — no heap alloc during draw
         self.pen_flare_day   = display.create_pen(255, 100, 0)
         self.pen_flare_night = display.create_pen(255, 250, 0)
         self.pen_hull_day    = display.create_pen(20, 20, 20)
         self.pen_hull_night  = display.create_pen(230, 240, 255)
 
-    def update(self, t, boss_mode=False):
-        if boss_mode:
+    def update(self, t):
+        if self.boss_mode:
             # Eratic, complex evasive maneuvers for boss fight
             self.y = int(120 + math.sin(t/10) * 60 + math.cos(t/6) * 30 + math.sin(t/3) * 10)
             self.x = int(60 + math.sin(t/8) * 35 + math.cos(t/5) * 15)
