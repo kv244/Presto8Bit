@@ -71,6 +71,14 @@ class Environment:
             self._pen_fg    = get_asm_pen(d, (120, 160, 200), (5, 5, 15),    self.trans)
             self._pen_house = get_asm_pen(d, (90, 110, 130),  (10, 10, 15),  self.trans)
 
+        # Respawn houses if they were destroyed by rain
+        if len(self.houses) < 12 and random.random() > 0.99:
+            # Spawn a new house "behind" the scrolling horizon
+            scroll = (cycle_timer * 2) % 320
+            # Put it at a position that will scroll in from the right
+            new_x = (scroll + 320 + random.randint(0, 50)) % 320
+            self.houses.append([new_x, random.randint(10, 25), random.randint(15, 40)])
+
     def draw_layer0(self, t):
         d = self.display
         d.set_layer(0)
