@@ -152,11 +152,14 @@ class Game:
         if random.random() > 0.60:
             _rain_spawn()
 
-        # Firing — only when aliens are present on screen
-        aliens_present = any(a.active for a in ALIEN_POOL.active_objects())
+        # Firing — rate scales with how many aliens are on screen
+        alien_count = sum(1 for a in ALIEN_POOL.active_objects() if a.active)
         is_danger = self.score <= 50
-        fire_threshold = 0.85 if is_danger else 0.96
-        if aliens_present and random.random() > fire_threshold:
+        base_threshold = 0.85 if is_danger else 0.96
+        # Each alien on-screen lowers the threshold by 0.02 (fires more often),
+        # floored at 0.60 so it never becomes a non-stop bullet stream.
+        fire_threshold = max(0.60, base_threshold - alien_count * 0.02)
+        if alien_count > 0 and random.random() > fire_threshold:
             self.fire_laser(self.ship.x + 10, self.ship.y)
             if is_danger:
                 self.fire_laser(self.ship.x, self.ship.y - 15)
