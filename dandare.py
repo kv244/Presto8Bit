@@ -57,7 +57,7 @@ class Game:
         self.ship = Ship(self.display)
 
         # 3. State
-        self.score     = 50
+        self.score     = 550
         self.game_over = False
         self.t         = 0
         self.PHASE_LEN = 1000
