@@ -1,5 +1,7 @@
 # Presto Bézier Swarm: Modular Engine (Dan Dare)
 
+![Screenshot 1](i1.jpg) ![Screenshot 2](i2.jpg)
+
 A high-performance, object-oriented 2D space shooter engine for the **Pimoroni Presto (RP2350)**. This project demonstrates advanced MicroPython techniques including Inline Assembly, Viper emitters, and a dual-layer hardware-composed rendering system.
 
 ## 🌟 Game Features & Mechanics
