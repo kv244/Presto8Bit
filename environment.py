@@ -1,8 +1,7 @@
-import random, time, math
+# Dan Dare: Modular Environment
+# Optimized for high-performance memory management on RP2350
+import random, math, time
 from utils import get_asm_pen
-
-# v2: added check_house_damage
-print("Loading environment.py...")
 
 class Environment:
     def __init__(self, display):
@@ -227,3 +226,5 @@ class Environment:
             dx = x - sx; dy = y - sy
             return (dx*dx + dy*dy) < 676
         return False
+
+import gc; gc.collect()

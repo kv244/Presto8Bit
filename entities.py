@@ -27,6 +27,10 @@ for _y, row in enumerate(ALIEN_SPRITE):
     if start != -1:
         ALIEN_LINES.append((start - 9, _y - 5, len(row) - 1 - 9))
 
+# Harvest RAM: Delete sprite source strings after conversion
+del ALIEN_SPRITE
+import gc; gc.collect()
+
 # ---------------------------------------------------------------------------
 # Entity classes
 # ---------------------------------------------------------------------------
@@ -55,28 +59,34 @@ class Alien:
         self.active = True
         self.hp = hp
 
+    @micropython.native
     def update(self):
-        if self.target:
-            self.t += self.speed
-            if self.t > 400:
+        t = self.t + self.speed
+        self.t = t
+        target = self.target
+        if target:
+            if t > 400:
                 self.active = False
             else:
-                tx = self.target.x + getattr(self.target, 'ox', 0)
-                ty = self.target.y + getattr(self.target, 'oy', 0)
-                dx = tx - self.x
-                dy = ty - self.y
+                # Cache everything in locals to avoid slow self-lookups
+                ax, ay = self.x, self.y
+                # Explicitly accessing ship attributes (targets are always ships)
+                tx, ty = target.x + target.ox, target.y + target.oy
+                dx, dy = tx - ax, ty - ay
                 dist = math.sqrt(dx*dx + dy*dy)
                 if dist > 0:
                     ms = self.move_speed
-                    self.x += (dx / dist) * ms
-                    self.y += (dy / dist) * ms
+                    self.x = ax + (dx / dist) * ms
+                    self.y = ay + (dy / dist) * ms
         else:
-            self.t += self.speed
-            if self.t > 256:
+            if t > 256:
                 self.active = False
             else:
-                self.x = get_bezier_point(self.t, self.p0[0], self.p1[0], self.p2[0])
-                self.y = get_bezier_point(self.t, self.p0[1], self.p1[1], self.p2[1])
+                p0_0, p0_1 = self.p0
+                p1_0, p1_1 = self.p1
+                p2_0, p2_1 = self.p2
+                self.x = get_bezier_point(t, p0_0, p1_0, p2_0)
+                self.y = get_bezier_point(t, p0_1, p1_1, p2_1)
 
     def draw(self, display, body_pen, glow_pen):
         cx = int(self.x); cy = int(self.y)
@@ -99,10 +109,12 @@ class Laser:
         self.x = x; self.y = y; self.vx = vx; self.vy = vy
         self.active = True; self.is_up = is_up
 
+    @micropython.native
     def update(self):
-        self.x += self.vx
-        self.y += self.vy
-        if self.x > 340 or self.x < -20 or self.y < -20 or self.y > 260:
+        vx, vy = self.vx, self.vy
+        nx, ny = self.x + vx, self.y + vy
+        self.x, self.y = nx, ny
+        if nx > 340 or nx < -20 or ny < -20 or ny > 260:
             self.active = False
 
     def draw(self, display, pen):
@@ -123,10 +135,12 @@ class EnemyLaser:
         self.x = x; self.y = y; self.vx = vx; self.vy = vy
         self.active = True
 
+    @micropython.native
     def update(self):
-        self.x += self.vx
-        self.y += self.vy
-        if self.x < -20 or self.x > 340 or self.y < -20 or self.y > 260:
+        vx, vy = self.vx, self.vy
+        nx, ny = self.x + vx, self.y + vy
+        self.x, self.y = nx, ny
+        if nx < -20 or nx > 340 or ny < -20 or ny > 260:
             self.active = False
 
     def draw(self, display, pen):
@@ -158,13 +172,16 @@ class Particle:
             self.life = 10
         self.active = True
 
+    @micropython.native
     def update(self):
-        self.x += self.vx
-        self.y += self.vy
-        if self.is_water:
+        nx, ny = self.x + self.vx, self.y + self.vy
+        self.x, self.y = nx, ny
+        is_water = self.is_water
+        if is_water:
             self.vy += 0.3
-        self.life -= 1
-        if self.life <= 0:
+        life = self.life - 1
+        self.life = life
+        if life <= 0:
             self.active = False
 
     def draw(self, display, pen, water_pen=None):
@@ -198,8 +215,9 @@ class Pool:
             obj.active = False
 
 
-# Pool sizes: sized generously for worst-case bursts
-ALIEN_POOL        = Pool(Alien,        30)
-LASER_POOL        = Pool(Laser,        20)
-PARTICLE_POOL     = Pool(Particle,    120)
-ENEMY_LASER_POOL  = Pool(EnemyLaser,   30)
+# Pool sizes: tuned for high-performance without heap exhaustion
+ALIEN_POOL        = Pool(Alien,        24) # 30 -> 24
+LASER_POOL        = Pool(Laser,        25) # More lasers for 7-way spread
+PARTICLE_POOL     = Pool(Particle,     80) # 120 -> 80 (Large RAM saving)
+ENEMY_LASER_POOL  = Pool(EnemyLaser,   20)
+gc.collect()

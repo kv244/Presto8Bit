@@ -35,6 +35,9 @@ for _y, row in enumerate(SHIP_SPRITE):
     if start != -1:
         SHIP_LINES.append((start - 10, _y - 10, len(row) - 1 - 10))
 
+del SHIP_SPRITE
+import gc; gc.collect()
+
 class Ship:
     __slots__ = ('display', 'x', 'y', 'recoil', 'boss_mode', 'aim_up', 'nuke_ready',
                  'pen_flare_day', 'pen_flare_night', 'pen_nuke_flare',
@@ -66,7 +69,12 @@ class Ship:
         if self.fire_cooldown > 0: self.fire_cooldown -= 1
 
     def draw(self, is_night, t):
-        d = self.display; sx = self.x + self.ox - (0 if self.aim_up else self.recoil); sy = self.y + self.oy + (self.recoil if self.aim_up else 0)
+        d = self.display
+        # Visual offsets for recoil and boss oscillations
+        bx = self.ox - (0 if self.aim_up else self.recoil)
+        by = self.oy + (self.recoil if self.aim_up else 0)
+        sx = int(self.x + bx)
+        sy = int(self.y + by)
 
         # Rocket flare flickering effect
         flare_radius = random.randint(3, 6)

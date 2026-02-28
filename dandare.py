@@ -6,15 +6,36 @@ from presto import Presto, Buzzer
 from machine import Pin
 import time, random, gc, micropython, math, sys
 
+import gc
+gc.collect()
+
 # Force reload of local modules on soft-reboot to pick up disk changes
 for mod in ['utils', 'entities', 'environment', 'ship']:
     if mod in sys.modules:
         del sys.modules[mod]
+gc.collect()
 
+print("Checking local modules...")
+print("-> Loading utils...")
+gc.collect()
+print(f"   [RAM] {gc.mem_free()} bytes free.")
 from utils import fast_dimmer
+print("   [OK] Utils loaded.")
+print("-> Loading entities...")
+gc.collect()
+print(f"   [RAM] {gc.mem_free()} bytes free.")
 from entities import ALIEN_POOL, LASER_POOL, PARTICLE_POOL, ENEMY_LASER_POOL
+print("   [OK] Entities loaded.")
+print("-> Loading environment...")
+gc.collect()
+print(f"   [RAM] {gc.mem_free()} bytes free.")
 from environment import Environment
+print("   [OK] Environment loaded.")
+print("-> Loading ship...")
+gc.collect()
+print(f"   [RAM] {gc.mem_free()} bytes free.")
 from ship import Ship
+print("   [OK] Ship loaded.")
 print("Local modules reloaded.")
 
 # ---------------------------------------------------------------------------
@@ -62,6 +83,10 @@ class Game:
 
         self.env  = Environment(self.display)
         self.ship = Ship(self.display)
+        
+        # Initial visual positions to prevent early draw errors
+        self.ship_vx = self.ship.x
+        self.ship_vy = self.ship.y
 
         # 3. State
         self.score     = 550
@@ -105,6 +130,7 @@ class Game:
         self.pen_boss_alien_body = d.create_pen(220, 30, 30)
         self.pen_boss_alien_glow = d.create_pen(255, 80, 80)
         self.pen_enemy_laser     = d.create_pen(255, 80, 0)  # red-orange bolt
+        self.pen_night_dim       = d.create_pen(0, 5, 20)    # static night dimmer
 
         # 5. High Score persistence
         try:
@@ -169,10 +195,12 @@ class Game:
         if l is not None:
             l.reset(x, y, vx, vy, is_up)
 
+    @micropython.native
     def get_nearest_alien(self, sx, sy):
         best_a = None
-        min_d2 = 999999
-        for a in ALIEN_POOL.active_objects():
+        min_d2 = 999999.0
+        # Cache alien pool locally for faster iteration
+        for a in ALIEN_POOL._pool:
             if a.active:
                 dx = a.x - sx
                 dy = a.y - sy
@@ -198,11 +226,13 @@ class Game:
         d.text(text, x, y, 320, size)
 
     # -----------------------------------------------------------------------
+    @micropython.native
     def update(self):
-        self.t += 1
+        self.t = self.t + 1
+        t = self.t
 
         # Throttled RTC check — only call time.localtime() rarely
-        self.time_check_counter += 1
+        self.time_check_counter = self.time_check_counter + 1
         if self.time_check_counter > 500:
             self.time_check_counter = 0
             now = time.localtime()
@@ -247,9 +277,12 @@ class Game:
         self.ship_vy = self.ship.y + self.ship.oy
         ship_x, ship_y = self.ship_vx, self.ship_vy
 
-        # Clamp the ship's anchor so it doesn't drift offscreen during autonomous movement
-        self.ship.x = max(20, min(300, self.ship.x))
-        self.ship.y = max(40, min(200, self.ship.y))
+        # ESCAPE/EVASION LOGIC: Pre-calculate counts/threats
+        alien_count = 0
+        for a in ALIEN_POOL._pool:
+            if a.active: alien_count += 1
+        is_horde = alien_count > 10
+        near_a = self.get_nearest_alien(ship_x, ship_y)
 
         # Autonomous movement while aiming up: Glide under the target
         if self.ship.aim_up:
@@ -263,10 +296,41 @@ class Game:
                 if abs(self.ship.x - tx) > 3:
                     self.ship.x += 4 if self.ship.x < tx else -4
         else:
-            # Return to home position (left side, UNLESS in boss fight)
-            home_x = 160 if self.boss_active else 45
-            if abs(self.ship.x - home_x) > 2:
-                self.ship.x += 2 if self.ship.x < home_x else -2
+            # Return to home position (left side, UNLESS in boss fight/horde)
+            home_x = 160 if self.boss_active or is_horde else 45
+            
+            # ESCAPE PROTOCOL: If any alien is too close during swarm, move exactly opposite
+            if near_a and (self.boss_active or is_horde):
+                adx, ady = ship_x - near_a.x, ship_y - near_a.y
+                dist_sq = adx*adx + ady*ady
+                if dist_sq < 4225: # Inside 65px: DANGER!
+                    dist = math.sqrt(dist_sq)
+                    if dist > 0:
+                        # High-speed repulsion
+                        vx, vy = (adx / dist) * 6, (ady / dist) * 5
+                        
+                        # ANTI-STUCK: If hitting a boundary, sidestep perpendicular to the threat
+                        if (self.ship.x <= 20 or self.ship.x >= 300) and abs(vx) > 1:
+                            # If pinned horizontally, burst vertically
+                            self.ship.y += 5 if ady > 0 else -5
+                        if (self.ship.y <= 40 or self.ship.y >= 200) and abs(vy) > 1:
+                            # If pinned vertically, burst horizontally
+                            self.ship.x += 6 if adx > 0 else -6
+                            
+                        self.ship.x += vx
+                        self.ship.y += vy
+                else:
+                    # No immediate death-spiral, return to home center
+                    if abs(self.ship.x - home_x) > 2:
+                        self.ship.x += 2 if self.ship.x < home_x else -2
+            else:
+                # Regular drift to home
+                if abs(self.ship.x - home_x) > 2:
+                    self.ship.x += 2 if self.ship.x < home_x else -2
+
+        # FINAL CLAMP: Move this to the end so evasion isn't choppy
+        self.ship.x = max(20, min(300, self.ship.x))
+        self.ship.y = max(40, min(200, self.ship.y))
 
         # Spawning — suppressed during boss fight
         if not self.boss_active:
@@ -303,7 +367,7 @@ class Game:
             self.boss_defeat_timer -= 1
 
         # Firing — rate scales with aliens; and house count affects fire rate/accuracy
-        alien_count = sum(1 for a in ALIEN_POOL.active_objects() if a.active)
+        # (alien_count already calculated for evasion above)
 
         # Halo intrusion check (automated defense fire at night)
         triggered_by_halo = False
@@ -584,11 +648,11 @@ class Game:
 
         # Night-time: spotlight + dimming (tracks visual ship position)
         if self.env.is_night:
-            fast_dimmer(d, 0, 5, 20)
+            fast_dimmer(d, self.pen_night_dim)
             d.set_pen(self.pen_halo)
-            d.circle(self.ship_vx, self.ship_vy, 42)
+            d.circle(int(self.ship_vx), int(self.ship_vy), 42)
             d.set_pen(self.pen_black)
-            d.circle(self.ship_vx, self.ship_vy, 40)
+            d.circle(int(self.ship_vx), int(self.ship_vy), 40)
 
         # Rain
         d.set_pen(self.pen_rain)

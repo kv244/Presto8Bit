@@ -17,10 +17,10 @@ def get_bezier_point(t_int: int, p0: int, p1: int, p2: int) -> int:
     return (inv_t * inv_t * p0 + 2 * inv_t * t_int * p1 + t_int * t_int * p2) >> 16
 
 @micropython.viper
-def fast_dimmer(display_obj, r: int, g: int, b: int):
+def fast_dimmer(display_obj, pen: int):
+    # Pass a pre-cached pen to avoid per-frame heap allocation
     d = display_obj
-    d.set_pen(d.create_pen(r, g, b))
-    # Optimization adjusted: Step 3 balances density for dark night overlays vs overhead
+    d.set_pen(pen)
     for y in range(0, 240, 3):
         d.line(0, y, 320, y)
 
