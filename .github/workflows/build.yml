@@ -41,11 +41,12 @@ jobs:
         cp README.md build/README.md
         
         # Compile all game engine files using -O2 for maximum space/performance optimization
-        mpy-cross -O2 dandare.py -o build/dandare.mpy
-        mpy-cross -O2 entities.py -o build/entities.mpy
-        mpy-cross -O2 environment.py -o build/environment.mpy
-        mpy-cross -O2 ship.py -o build/ship.mpy
-        mpy-cross -O2 utils.py -o build/utils.mpy
+        # We specify -march=armv6m for RP2040/RP2350 compatibility with the @micropython.asm_thumb emitter
+        mpy-cross -march=armv6m -O2 dandare.py -o build/dandare.mpy
+        mpy-cross -march=armv6m -O2 entities.py -o build/entities.mpy
+        mpy-cross -march=armv6m -O2 environment.py -o build/environment.mpy
+        mpy-cross -march=armv6m -O2 ship.py -o build/ship.mpy
+        mpy-cross -march=armv6m -O2 utils.py -o build/utils.mpy
         
     - name: Archive compiled game artifacts
       uses: actions/upload-artifact@v4
