@@ -83,43 +83,46 @@ class Alien:
 
 
 class Laser:
-    __slots__ = ('x', 'y', 'vy', 'active')
+    __slots__ = ('x', 'y', 'vx', 'vy', 'active', 'is_up')
 
     def __init__(self):
         self.active = False
         self.x = 0; self.y = 0
 
-    def reset(self, x, y, vy=0):
-        self.x = x; self.y = y; self.vy = vy
-        self.active = True
+    def reset(self, x, y, vx=12, vy=0, is_up=False):
+        self.x = x; self.y = y; self.vx = vx; self.vy = vy
+        self.active = True; self.is_up = is_up
 
     def update(self):
-        self.x += 12
+        self.x += self.vx
         self.y += self.vy
-        if self.x > 340 or self.y < -20 or self.y > 260:
+        if self.x > 340 or self.x < -20 or self.y < -20 or self.y > 260:
             self.active = False
 
     def draw(self, display, pen):
         display.set_pen(pen)
-        display.line(self.x, self.y, self.x - 20, self.y)
+        if self.is_up:
+            display.line(int(self.x), int(self.y), int(self.x), int(self.y + 15))
+        else:
+            display.line(int(self.x), int(self.y), int(self.x - 20), int(self.y))
 
 
 class EnemyLaser:
     """Alien projectile — travels leftward toward the ship."""
-    __slots__ = ('x', 'y', 'vy', 'active')
+    __slots__ = ('x', 'y', 'vx', 'vy', 'active')
 
     def __init__(self):
         self.active = False
         self.x = 0; self.y = 0; self.vy = 0
 
-    def reset(self, x, y, vy=0):
-        self.x = x; self.y = y; self.vy = vy
+    def reset(self, x, y, vx=-10, vy=0):
+        self.x = x; self.y = y; self.vx = vx; self.vy = vy
         self.active = True
 
     def update(self):
-        self.x -= 10
+        self.x += self.vx
         self.y += self.vy
-        if self.x < -20 or self.y < -20 or self.y > 260:
+        if self.x < -20 or self.x > 340 or self.y < -20 or self.y > 260:
             self.active = False
 
     def draw(self, display, pen):

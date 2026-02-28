@@ -10,10 +10,10 @@ class Environment:
         self.fractal_bg = [random.randint(70, 140) for _ in range(30)]
         self.fractal_fg = [random.randint(30, 70) for _ in range(20)]
         self.stars = [(random.randint(0, 320), random.randint(0, 240)) for _ in range(20)]
-        # Generate clouds with individual randomized light blue shades
+        # Clouds: [x, y, speed, rgb_tuple, health]
         self.clouds = [[
             random.randint(0, 320), random.randint(20, 50), random.uniform(0.2, 0.4),
-            (random.randint(140, 180), random.randint(190, 230), 255)
+            (random.randint(140, 180), random.randint(190, 230), 255), 3
         ] for _ in range(5)]
         # Houses: [x, width, height, health]
         self.houses = [[random.randint(0, 319), random.randint(10, 25), random.randint(15, 40), random.randint(3, 7)] for _ in range(12)]
@@ -79,6 +79,15 @@ class Environment:
             # Put it at a position that will scroll in from the right
             new_x = (scroll + 320 + random.randint(0, 50)) % 320
             self.houses.append([new_x, random.randint(10, 25), random.randint(15, 40), random.randint(3, 7)])
+
+        # Respawn clouds if they were destroyed
+        if len(self.clouds) < 5 and random.random() > 0.995:
+            self.clouds.append([
+                random.randint(0, 320), random.randint(20, 50), random.uniform(0.2, 0.4),
+                (random.randint(140, 180), random.randint(190, 230), 255), 3
+            ])
+            # Regenerate pens to match count (simple for now)
+            self.cloud_pens = [self.display.create_pen(*c[3]) for c in self.clouds]
 
     def draw_layer0(self, t):
         d = self.display
@@ -157,4 +166,20 @@ class Environment:
                     if h[3] <= 0:
                         self.houses.pop(i)
                     return True
+        return False
+
+    def check_cloud_damage(self, x, y, t):
+        """Checks if a point (x, y) hit any cloud."""
+        for i in range(len(self.clouds) - 1, -1, -1):
+            c = self.clouds[i]
+            cx = int((c[0] - t * c[2]) % 340) - 20
+            cy = c[1]
+            
+            # Rough bounding box for the cloud cluster
+            if cx - 10 < x < cx + 25 and cy - 10 < y < cy + 10:
+                c[4] -= 1 # damage health
+                if c[4] <= 0:
+                    self.clouds.pop(i)
+                    self.cloud_pens.pop(i)
+                return True
         return False

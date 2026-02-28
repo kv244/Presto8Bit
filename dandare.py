@@ -140,10 +140,10 @@ class Game:
                 move_speed=3.5    # much faster than normal seekers (1.8)
             )
 
-    def fire_laser(self, x, y, vy=0):
+    def fire_laser(self, x, y, vx=12, vy=0, is_up=False):
         l = LASER_POOL.get()
         if l is not None:
-            l.reset(x, y, vy)
+            l.reset(x, y, vx, vy, is_up)
 
     def spawn_particles(self, x, y, count, is_water=False):
         for _ in range(count):
@@ -183,6 +183,8 @@ class Game:
         # Environment & ship
         self.env.update(self.t % (self.PHASE_LEN * 4), self.PHASE_LEN)
         self.ship.boss_mode = self.boss_active
+        # Ship aims up if village is in trouble (< 6 houses)
+        self.ship.aim_up = len(self.env.houses) < 6
         self.ship.update(self.t)
         ship_x = self.ship.x
         ship_y = self.ship.y
@@ -194,7 +196,10 @@ class Game:
                 spawn_threshold = max(0.70, 0.94 - ((self.score - 300) * 0.0004))
             if random.random() > spawn_threshold:
                 self.spawn_alien()
-        if random.random() > 0.60:
+        
+        # Rain scales strictly with cloud count (0.16 chance per cloud)
+        rain_chance = len(self.env.clouds) * 0.16
+        if random.random() < rain_chance:
             _rain_spawn()
 
         # Boss fight trigger
@@ -233,11 +238,18 @@ class Game:
                 sx = self.ship.x; sy = self.ship.y
                 # Each shot gets a small random deflection based on miss_factor
                 deflect = lambda: (random.random() - 0.5) * miss_factor
-                self.fire_laser(sx + 10, sy,       vy=deflect())          # centre
-                self.fire_laser(sx + 5,  sy - 15,  vy=deflect())   # spread up
-                self.fire_laser(sx + 5,  sy + 15,  vy=deflect())   # spread down
-                self.fire_laser(sx,      sy - 30,  vy=deflect())   # wide up
-                self.fire_laser(sx,      sy + 30,  vy=deflect())   # wide down
+                
+                if self.ship.aim_up:
+                    # Fire UP at clouds (wide spread)
+                    self.fire_laser(sx,      sy - 10, vx=0, vy=-12, is_up=True)
+                    self.fire_laser(sx - 15, sy - 5,  vx=0, vy=-12, is_up=True)
+                    self.fire_laser(sx + 15, sy - 5,  vx=0, vy=-12, is_up=True)
+                else:
+                    self.fire_laser(sx + 10, sy,       vy=deflect())          # centre
+                    self.fire_laser(sx + 5,  sy - 15,  vy=deflect())   # spread up
+                    self.fire_laser(sx + 5,  sy + 15,  vy=deflect())   # spread down
+                    self.fire_laser(sx,      sy - 30,  vy=deflect())   # wide up
+                    self.fire_laser(sx,      sy + 30,  vy=deflect())   # wide down
                 self.ship.recoil = 5
                 self.buzzer.set_tone(1800)
             else:
@@ -254,10 +266,15 @@ class Game:
             fire_threshold = max(0.60, base_threshold - alien_count * 0.02 + fire_rate_penalty)
             if alien_count > 0 and random.random() > fire_threshold:
                 deflect = lambda: (random.random() - 0.5) * miss_factor
-                self.fire_laser(self.ship.x + 10, self.ship.y, vy=deflect())
-                if is_danger:
-                    self.fire_laser(self.ship.x, self.ship.y - 15, vy=deflect())
-                    self.fire_laser(self.ship.x, self.ship.y + 15, vy=deflect())
+                if self.ship.aim_up:
+                    # Fire UP at clouds
+                    self.fire_laser(self.ship.x, self.ship.y - 10, vx=0, vy=-12, is_up=True)
+                else:
+                    # Fire RIGHT at aliens
+                    self.fire_laser(self.ship.x + 10, self.ship.y, vy=deflect())
+                    if is_danger:
+                        self.fire_laser(self.ship.x, self.ship.y - 15, vy=deflect())
+                        self.fire_laser(self.ship.x, self.ship.y + 15, vy=deflect())
                 self.ship.recoil = 5
                 self.buzzer.set_tone(1500 if is_danger else 1200)
             else:
@@ -339,6 +356,15 @@ class Game:
             if not l.active:
                 continue
             lx = l.x; ly = l.y
+
+            # Cloud check (if firing up)
+            if l.is_up:
+                if self.env.check_cloud_damage(lx, ly, self.t):
+                    self.explode_timer = 2
+                    self.spawn_particles(lx, ly, 4, is_water=True)
+                    l.active = False
+                    continue
+
             for a in ALIEN_POOL.active_objects():
                 if not a.active:
                     continue
