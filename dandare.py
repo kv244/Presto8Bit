@@ -143,7 +143,9 @@ class Game:
 
     def spawn_boss_swarm(self):
         """Spawn 16 boss aliens in a perfect contracting ring around the ship."""
-        ship_x, ship_y = self.ship_vx, self.ship_vy
+        self.score += 500  # Extra life points for the boss fight
+        self.ship.x = 280  # Move to the far right
+        ship_x, ship_y = self.ship.x, self.ship.y
         radius = 120
         count  = 16
         for i in range(count):
@@ -261,8 +263,8 @@ class Game:
                 if abs(self.ship.x - tx) > 3:
                     self.ship.x += 4 if self.ship.x < tx else -4
         else:
-            # Return to home position (left side)
-            home_x = 45
+            # Return to home position (left side, UNLESS in boss fight)
+            home_x = 280 if self.boss_active else 45
             if abs(self.ship.x - home_x) > 2:
                 self.ship.x += 2 if self.ship.x < home_x else -2
 
@@ -347,12 +349,18 @@ class Game:
                         vx = float(cx - sx) * -12.0 / (cy - sy) if cy != sy else 0
                         self.fire_laser(sx, sy - 10, vx=vx, vy=-12, is_up=True)
                 else:
-                    self.fire_laser(sx + 10, sy,       vy=deflect())          # centre
-                    self.fire_laser(sx + 5,  sy - 15,  vy=deflect())   # spread up
-                    self.fire_laser(sx + 5,  sy + 15,  vy=deflect())   # spread down
-                    self.fire_laser(sx,      sy - 30,  vy=deflect())   # wide up
-                    self.fire_laser(sx,      sy + 30,  vy=deflect())   # wide down
+                    # MASSIVE FIREPOWER: 7-way spread, overlapping streams
+                    self.fire_laser(sx + 10, sy,       vx=14, vy=deflect())   # centre
+                    self.fire_laser(sx + 5,  sy - 12,  vx=13, vy=deflect()-1) # up
+                    self.fire_laser(sx + 5,  sy + 12,  vx=13, vy=deflect()+1) # down
+                    self.fire_laser(sx,      sy - 24,  vx=12, vy=deflect()-2) # wide up
+                    self.fire_laser(sx,      sy + 24,  vx=12, vy=deflect()+2) # wide down
+                    self.fire_laser(sx - 5,  sy - 36,  vx=11, vy=deflect()-3) # extreme up
+                    self.fire_laser(sx - 5,  sy + 36,  vx=11, vy=deflect()+3) # extreme down
+                
                 self.ship.recoil = 5
+                # Ultra fast cooldown for massive fire
+                self.ship.fire_cooldown = 2 if not self.ship.aim_up else 3
                 self.buzzer.set_tone(1800)
             else:
                 if self.nuke_anim_timer > 0:
