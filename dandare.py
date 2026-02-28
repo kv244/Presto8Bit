@@ -214,10 +214,16 @@ class Game:
         # BUT only if we aren't in the "just killed a cloud" recovery window
         # danger overrides the recovery window to allow emergency nuking
         has_clouds = len(self.env.clouds) > 0
-        trouble = len(self.env.houses) < 6 and has_clouds and self.cloud_revert_timer == 0
-        danger  = self.score < 25 and not self.nuke_used and has_clouds
-        # Boss fights override upward aiming to focus on the threat
-        self.ship.aim_up = (trouble or danger) if not self.boss_active else False
+        # BOSS CRITICAL: village almost gone during boss fight
+        is_critical = (self.score < 25 or (self.boss_active and len(self.env.houses) < 4))
+        danger = is_critical and not self.nuke_used and has_clouds
+        
+        # Ship aims up if village is in trouble or in danger
+        # Boss fights normally override upward aiming UNLESS it's a critical danger
+        if self.boss_active:
+            self.ship.aim_up = danger
+        else:
+            self.ship.aim_up = trouble or danger
         self.ship.update(self.t)
         # Visual ship position (for collisions, firing origin AND halo)
         self.ship_vx = self.ship.x + self.ship.ox
@@ -457,7 +463,7 @@ class Game:
                     l.active = False
                     continue
                 # NUKE CHECK: Shoot the sun/moon to wipe the screen
-                if self.score < 25 and not self.nuke_used:
+                if (self.score < 25 or (self.boss_active and len(self.env.houses) < 4)) and not self.nuke_used:
                     if self.env.check_celestial_damage(lx, ly, self.t):
                         self.score += 100 # Huge bonus for nuclear trigger
                         print("Nuclear")
