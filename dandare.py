@@ -142,24 +142,24 @@ class Game:
         )
 
     def spawn_boss_swarm(self):
-        """Spawn 12 boss aliens in a ring on the right side, all homing on the ship."""
-        cx, cy = 310, 120
-        radius = 90
+        """Spawn 16 boss aliens in a perfect contracting ring around the ship."""
+        ship_x, ship_y = self.ship_vx, self.ship_vy
+        radius = 120
         count  = 16
         for i in range(count):
             a = ALIEN_POOL.get()
             if a is None:
                 break
             angle = (2 * math.pi * i) / count
-            sx = int(cx + math.cos(angle) * radius)
-            sy = int(cy + math.sin(angle) * radius)
+            sx = int(ship_x + math.cos(angle) * radius)
+            sy = int(ship_y + math.sin(angle) * radius)
             a.reset(
                 (sx, sy), (0, 0), (0, 0),
                 speed=1,          
                 target=self.ship,
                 is_boss=True,
-                move_speed=3.8,    # Even faster!
-                hp=4               # Even tougher!
+                move_speed=3.8,    
+                hp=4               
             )
 
     def fire_laser(self, x, y, vx=12, vy=0, is_up=False):

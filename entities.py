@@ -63,9 +63,11 @@ class Alien:
             else:
                 dx = self.target.x - self.x
                 dy = self.target.y - self.y
-                ms = self.move_speed
-                self.x += ms if dx > 0 else -ms
-                self.y += ms if dy > 0 else -ms
+                dist = math.sqrt(dx*dx + dy*dy)
+                if dist > 0:
+                    ms = self.move_speed
+                    self.x += (dx / dist) * ms
+                    self.y += (dy / dist) * ms
         else:
             self.t += self.speed
             if self.t > 256:
