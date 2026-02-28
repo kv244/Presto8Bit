@@ -288,6 +288,17 @@ class Game:
 
         # Firing — rate scales with aliens; and house count affects fire rate/accuracy
         alien_count = sum(1 for a in ALIEN_POOL.active_objects() if a.active)
+
+        # Halo intrusion check (automated defense fire at night)
+        triggered_by_halo = False
+        if self.env.is_night:
+            for a in ALIEN_POOL.active_objects():
+                if a.active:
+                    adx = a.x - ship_x; ady = a.y - ship_y
+                    if adx*adx + ady*ady < 1764: # 42px radius squared
+                        triggered_by_halo = True
+                        break
+
         house_count = len(self.env.houses)
         is_danger   = self.score <= 50
         
@@ -301,7 +312,7 @@ class Game:
             # If aiming up, we fire much more often and in a massive spread
             if self.ship.aim_up: fire_threshold = 0.30
 
-            if (self.ship.aim_up or alien_count > 0) and random.random() > fire_threshold:
+            if (self.ship.aim_up or alien_count > 0) and (random.random() > fire_threshold or triggered_by_halo):
                 sx, sy = ship_x, ship_y
                 # Each shot gets a small random deflection based on miss_factor
                 deflect = lambda: (random.random() - 0.5) * miss_factor
@@ -339,7 +350,7 @@ class Game:
             # Upward fire is much faster even in regular mode
             if self.ship.aim_up: fire_threshold = 0.50
 
-            if (self.ship.aim_up or alien_count > 0) and random.random() > fire_threshold:
+            if (self.ship.aim_up or alien_count > 0) and (random.random() > fire_threshold or triggered_by_halo):
                 deflect = lambda: (random.random() - 0.5) * miss_factor
                 if self.ship.aim_up:
                     # Fire UP at clouds (Massive 3-way spread + optional seeker)
