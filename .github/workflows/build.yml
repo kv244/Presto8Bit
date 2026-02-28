@@ -1,0 +1,66 @@
+name: Dan Dare Pipeline
+
+on:
+  push:
+    branches: [ "master", "main" ]
+  pull_request:
+    branches: [ "master", "main" ]
+  release:
+    types: [published]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+        
+    - name: Install Linting & Compilation Tools
+      run: |
+        python -m pip install --upgrade pip
+        pip install ruff
+        pip install mpy-cross
+
+    - name: Lint with Ruff
+      run: |
+        # Stop the build if there are critical Python syntax errors. 
+        # We ignore undefined names (F821) because `presto` and hardware modules aren't available on the runner.
+        ruff check . --select=E9,F63,F7,F82 --ignore=F821
+        
+    - name: Compile to .mpy (MicroPython Bytecode)
+      run: |
+        mkdir -p build
+        
+        # The main boot/launcher file must stay as text .py
+        cp main.py build/main.py
+        cp README.md build/README.md
+        
+        # Compile all game engine files using -O2 for maximum space/performance optimization
+        mpy-cross -O2 dandare.py -o build/dandare.mpy
+        mpy-cross -O2 entities.py -o build/entities.mpy
+        mpy-cross -O2 environment.py -o build/environment.mpy
+        mpy-cross -O2 ship.py -o build/ship.mpy
+        mpy-cross -O2 utils.py -o build/utils.mpy
+        
+    - name: Archive compiled game artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: dandare-mpy-build
+        path: build/
+
+    - name: Zip Release Package
+      if: github.event_name == 'release'
+      run: |
+        cd build
+        zip -r ../dandare_dist.zip *
+
+    - name: Upload Release Asset
+      if: github.event_name == 'release'
+      uses: softprops/action-gh-release@v2
+      with:
+        files: dandare_dist.zip
