@@ -36,17 +36,19 @@ for _y, row in enumerate(SHIP_SPRITE):
         SHIP_LINES.append((start - 10, _y - 10, len(row) - 1 - 10))
 
 class Ship:
-    __slots__ = ('display', 'x', 'y', 'recoil', 'boss_mode', 'aim_up',
-                 'pen_flare_day', 'pen_flare_night',
-                 'pen_hull_day', 'pen_hull_night', 'ox', 'oy')
+    __slots__ = ('display', 'x', 'y', 'recoil', 'boss_mode', 'aim_up', 'nuke_ready',
+                 'pen_flare_day', 'pen_flare_night', 'pen_nuke_flare',
+                 'pen_hull_day', 'pen_hull_night', 'ox', 'oy', 'fire_cooldown')
 
     def __init__(self, display):
         self.display = display
-        self.y = 120; self.recoil = 0; self.x = 45; self.boss_mode = False; self.aim_up = False
+        self.y = 120; self.recoil = 0; self.x = 45; self.boss_mode = False; self.aim_up = False; self.nuke_ready = False
+        self.fire_cooldown = 0
         self.ox = 0; self.oy = 0
         # Pre-cache pens once — no heap alloc during draw
         self.pen_flare_day   = display.create_pen(255, 100, 0)
         self.pen_flare_night = display.create_pen(255, 250, 0)
+        self.pen_nuke_flare  = display.create_pen(255, 0, 0)
         self.pen_hull_day    = display.create_pen(20, 20, 20)
         self.pen_hull_night  = display.create_pen(230, 240, 255)
 
@@ -61,14 +63,20 @@ class Ship:
             self.ox = int(math.sin(t/11) * 20)
         
         if self.recoil > 0: self.recoil -= 1
+        if self.fire_cooldown > 0: self.fire_cooldown -= 1
 
-    def draw(self, is_night):
+    def draw(self, is_night, t):
         d = self.display; sx = self.x + self.ox - (0 if self.aim_up else self.recoil); sy = self.y + self.oy + (self.recoil if self.aim_up else 0)
 
         # Rocket flare flickering effect
         flare_radius = random.randint(3, 6)
         flare_offset = random.randint(15, 18)
-        d.set_pen(self.pen_flare_night if is_night else self.pen_flare_day)
+        if self.nuke_ready:
+            # Dangerous red pulsing flare
+            d.set_pen(self.pen_nuke_flare if (t // 4) % 2 == 0 else self.pen_flare_night)
+        else:
+            d.set_pen(self.pen_flare_night if is_night else self.pen_flare_day)
+        
         if self.aim_up:
             d.circle(sx, sy + flare_offset, flare_radius) # Flare below when aiming up
         else:

@@ -33,7 +33,7 @@ for _y, row in enumerate(ALIEN_SPRITE):
 
 class Alien:
     __slots__ = ('p0', 'p1', 'p2', 't', 'speed', 'active', 'x', 'y', 'target',
-                 'is_boss', 'move_speed')
+                 'is_boss', 'move_speed', 'hp')
 
     def __init__(self):
         self.active = False
@@ -43,8 +43,9 @@ class Alien:
         self.target = None
         self.is_boss = False
         self.move_speed = 1.8
+        self.hp = 1
 
-    def reset(self, p0, p1, p2, speed, target=None, is_boss=False, move_speed=1.8):
+    def reset(self, p0, p1, p2, speed, target=None, is_boss=False, move_speed=1.8, hp=1):
         self.p0 = p0; self.p1 = p1; self.p2 = p2
         self.t = 0; self.speed = speed
         self.x = p0[0]; self.y = p0[1]
@@ -52,6 +53,7 @@ class Alien:
         self.is_boss = is_boss
         self.move_speed = move_speed
         self.active = True
+        self.hp = hp
 
     def update(self):
         if self.target:

@@ -121,19 +121,24 @@ class Game:
         sy = random.randint(40, 160)
         tx = -50 if random.random() > 0.3 else 370
         is_seeker = self.ship if random.random() > 0.85 else None
+        
+        # Elite alien chance: 15% chance to have 2HP (drawn in red like a mini-boss)
+        is_elite = random.random() > 0.85
         a.reset(
             (340, sy),
             (random.randint(0, 320), random.randint(0, 240)),
             (tx, sy + random.randint(-80, 80)),
             random.randint(2, 5),
-            is_seeker
+            is_seeker,
+            is_boss=is_elite,
+            hp=2 if is_elite else 1
         )
 
     def spawn_boss_swarm(self):
         """Spawn 12 boss aliens in a ring on the right side, all homing on the ship."""
         cx, cy = 310, 120
         radius = 90
-        count  = 12
+        count  = 16
         for i in range(count):
             a = ALIEN_POOL.get()
             if a is None:
@@ -143,10 +148,11 @@ class Game:
             sy = int(cy + math.sin(angle) * radius)
             a.reset(
                 (sx, sy), (0, 0), (0, 0),
-                speed=1,          # t clock ticks slowly so they live 400 frames
+                speed=1,          
                 target=self.ship,
                 is_boss=True,
-                move_speed=3.5    # much faster than normal seekers (1.8)
+                move_speed=3.8,    # Even faster!
+                hp=4               # Even tougher!
             )
 
     def fire_laser(self, x, y, vx=12, vy=0, is_up=False):
@@ -308,13 +314,18 @@ class Game:
         miss_factor = (12 - house_count) * 0.35
 
         if self.boss_active:
-            # SUPER FIRE: low threshold, 5-way spread
-            fire_threshold = max(0.35, 0.80 - alien_count * 0.02 + fire_rate_penalty)
-            # If aiming up, we fire much more often and in a massive spread
-            if self.ship.aim_up: fire_threshold = 0.30
+            # BOSS FIRE: high frequency with cooldown if target present
+            fire_threshold = max(0.20, 0.60 - alien_count * 0.02 + fire_rate_penalty)
+            if self.ship.aim_up: fire_threshold = 0.15
 
-            if (self.ship.aim_up or alien_count > 0) and (random.random() > fire_threshold or triggered_by_halo):
+            target_a = self.get_nearest_alien(ship_x, ship_y)
+            # Automatic fire is gated by the fire_cooldown for sustainability
+            should_fire = (random.random() > fire_threshold or triggered_by_halo or (target_a and not self.ship.aim_up))
+            should_fire = should_fire and (self.ship.fire_cooldown == 0)
+
+            if (self.ship.aim_up or alien_count > 0) and should_fire:
                 sx, sy = ship_x, ship_y
+                self.ship.fire_cooldown = 3 # Cooldown of 3 frames (~15-20 shots/sec)
                 # Each shot gets a small random deflection based on miss_factor
                 deflect = lambda: (random.random() - 0.5) * miss_factor
                 
@@ -346,12 +357,16 @@ class Game:
                 else:
                     self.buzzer.set_tone(0)
         else:
-            base_threshold = 0.85 if is_danger else 0.96
-            fire_threshold = max(0.60, base_threshold - alien_count * 0.02 + fire_rate_penalty)
-            # Upward fire is much faster even in regular mode
-            if self.ship.aim_up: fire_threshold = 0.50
+            base_threshold = 0.75 if is_danger else 0.90
+            fire_threshold = max(0.50, base_threshold - alien_count * 0.02 + fire_rate_penalty)
+            if self.ship.aim_up: fire_threshold = 0.40
 
-            if (self.ship.aim_up or alien_count > 0) and (random.random() > fire_threshold or triggered_by_halo):
+            target_a = self.get_nearest_alien(ship_x, ship_y)
+            should_fire = (random.random() > fire_threshold or triggered_by_halo or (target_a and not self.ship.aim_up))
+            should_fire = should_fire and (self.ship.fire_cooldown == 0)
+
+            if (self.ship.aim_up or alien_count > 0) and should_fire:
+                self.ship.fire_cooldown = 4 # slightly slower in regular mode
                 deflect = lambda: (random.random() - 0.5) * miss_factor
                 if self.ship.aim_up:
                     # Fire UP at clouds (Massive 3-way spread + optional seeker)
@@ -396,8 +411,8 @@ class Game:
         # All aliens fire back — each active alien has a small frame chance
         for a in ALIEN_POOL.active_objects():
             if a.active:
-                # Base probabilities
-                prob = 0.06 if a.is_boss else 0.003
+                # Base probabilities: bosses fire much faster now
+                prob = 0.12 if a.is_boss else 0.005
                 
                 # Homing aliens fire wildly as they approach
                 if a.target:
@@ -498,7 +513,10 @@ class Game:
                     self.score += 10
                     self.explode_timer = 5
                     self.spawn_particles(a.x, a.y, 8)
-                    a.active = False
+                    a.hp -= 1
+                    if a.hp <= 0:
+                        self.score += 20 if a.is_boss else 10 # More points for elites/bosses
+                        a.active = False
                     l.active = False
                     break
 
