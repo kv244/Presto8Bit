@@ -101,10 +101,8 @@ class Laser:
 
     def draw(self, display, pen):
         display.set_pen(pen)
-        if self.is_up:
-            display.line(int(self.x), int(self.y), int(self.x), int(self.y + 15))
-        else:
-            display.line(int(self.x), int(self.y), int(self.x - 20), int(self.y))
+        # Draw tail pointing opposite to velocity vector
+        display.line(int(self.x), int(self.y), int(self.x - self.vx * 1.5), int(self.y - self.vy * 1.5))
 
 
 class EnemyLaser:
@@ -127,7 +125,8 @@ class EnemyLaser:
 
     def draw(self, display, pen):
         display.set_pen(pen)
-        display.line(self.x, self.y, self.x + 16, self.y)  # tail points right
+        # Draw tail pointing opposite to velocity vector
+        display.line(int(self.x), int(self.y), int(self.x - self.vx * 1.5), int(self.y - self.vy * 1.5))
 
 
 class Particle:
