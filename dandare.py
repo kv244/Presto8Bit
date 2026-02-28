@@ -6,7 +6,7 @@ from presto import Presto, Buzzer
 from machine import Pin
 import time, random, gc, micropython, math
 from utils import fast_dimmer
-from entities import ALIEN_POOL, LASER_POOL, PARTICLE_POOL
+from entities import ALIEN_POOL, LASER_POOL, PARTICLE_POOL, ENEMY_LASER_POOL
 from environment import Environment
 from ship import Ship
 
@@ -81,6 +81,7 @@ class Game:
         self.pen_boss_shadow = d.create_pen(80, 0, 0)
         self.pen_boss_alien_body = d.create_pen(220, 30, 30)
         self.pen_boss_alien_glow = d.create_pen(255, 80, 80)
+        self.pen_enemy_laser     = d.create_pen(255, 80, 0)  # red-orange bolt
 
         # 5. High Score persistence
         try:
@@ -230,6 +231,13 @@ class Game:
                     self.explode_timer -= 1
                 else:
                     self.buzzer.set_tone(0)
+            # Boss aliens fire back — each active boss alien has a ~0.3%/frame chance
+            for a in ALIEN_POOL.active_objects():
+                if a.active and a.is_boss:
+                    if random.random() > 0.997:
+                        el = ENEMY_LASER_POOL.get()
+                        if el is not None:
+                            el.reset(int(a.x) - 8, int(a.y))
         else:
             base_threshold = 0.85 if is_danger else 0.96
             fire_threshold = max(0.60, base_threshold - alien_count * 0.02)
@@ -258,6 +266,25 @@ class Game:
                     self.spawn_particles(_rain_x[i], 240,
                                          random.randint(2, 4), is_water=True)
                     _rain_live[i] = False
+
+        # ---- Enemy laser update + ship collision ----
+        ship_x = self.ship.x; ship_y = self.ship.y
+        for el in ENEMY_LASER_POOL.active_objects():
+            if not el.active:
+                continue
+            el.update()
+            if not el.active:
+                continue
+            dx = el.x - ship_x; dy = el.y - ship_y
+            if dx*dx + dy*dy < 225:          # ~15px hit radius
+                penalty = max(5, self.score // 10)   # 10% of score, min 5
+                self.score = max(0, self.score - penalty)
+                self.impact_timer = 10
+                self.spawn_particles(ship_x, ship_y, 6)
+                el.active = False
+                if self.score <= 0:
+                    self.game_over = True
+                    self.pause_timer = 150
 
         # ---- Laser update + collision ----
         ship_x = self.ship.x
@@ -345,6 +372,11 @@ class Game:
         for l in LASER_POOL.active_objects():
             if l.active:
                 l.draw(d, self.pen_laser)
+
+        # Enemy lasers
+        for el in ENEMY_LASER_POOL.active_objects():
+            if el.active:
+                el.draw(d, self.pen_enemy_laser)
 
         # Particles
         for p in PARTICLE_POOL.active_objects():

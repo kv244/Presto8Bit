@@ -103,6 +103,28 @@ class Laser:
         display.line(self.x, self.y, self.x - 20, self.y)
 
 
+class EnemyLaser:
+    """Alien projectile — travels leftward toward the ship."""
+    __slots__ = ('x', 'y', 'active')
+
+    def __init__(self):
+        self.active = False
+        self.x = 0; self.y = 0
+
+    def reset(self, x, y):
+        self.x = x; self.y = y
+        self.active = True
+
+    def update(self):
+        self.x -= 10          # moves left
+        if self.x < -20:
+            self.active = False
+
+    def draw(self, display, pen):
+        display.set_pen(pen)
+        display.line(self.x, self.y, self.x + 16, self.y)  # tail points right
+
+
 class Particle:
     __slots__ = ('x', 'y', 'vx', 'vy', 'life', 'active', 'is_water')
 
@@ -162,6 +184,7 @@ class Pool:
 
 
 # Pool sizes: sized generously for worst-case bursts
-ALIEN_POOL  = Pool(Alien,    30)
-LASER_POOL  = Pool(Laser,    20)
-PARTICLE_POOL = Pool(Particle, 120)
+ALIEN_POOL        = Pool(Alien,        30)
+LASER_POOL        = Pool(Laser,        20)
+PARTICLE_POOL     = Pool(Particle,    120)
+ENEMY_LASER_POOL  = Pool(EnemyLaser,   30)
