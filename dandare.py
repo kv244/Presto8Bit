@@ -206,8 +206,13 @@ class Game:
         # Boss fights override upward aiming to focus on the threat
         self.ship.aim_up = (trouble or danger) if not self.boss_active else False
         self.ship.update(self.t)
-        ship_x = self.ship.x
-        ship_y = self.ship.y
+        # Visual ship position (for collisions and firing origin)
+        ship_x = self.ship.x + self.ship.ox
+        ship_y = self.ship.y + self.ship.oy
+
+        # Clamp the ship's anchor so it doesn't drift offscreen during autonomous movement
+        self.ship.x = max(20, min(300, self.ship.x))
+        self.ship.y = max(40, min(200, self.ship.y))
 
         # Autonomous movement while aiming up: Glide under the target
         if self.ship.aim_up:
@@ -271,7 +276,7 @@ class Game:
             if self.ship.aim_up: fire_threshold = 0.30
 
             if (self.ship.aim_up or alien_count > 0) and random.random() > fire_threshold:
-                sx = self.ship.x; sy = self.ship.y
+                sx, sy = ship_x, ship_y
                 # Each shot gets a small random deflection based on miss_factor
                 deflect = lambda: (random.random() - 0.5) * miss_factor
                 
@@ -279,7 +284,6 @@ class Game:
                     # Cloud Eraser: Massive 7-way fan
                     # If in danger, one laser targets the celestial body (Sun/Moon)
                     cx, cy = self.env.get_celestial_coords(self.t)
-                    sx, sy = self.ship.x, self.ship.y
                     for offset in [-45, -30, -15, 0, 15, 30, 45]:
                         self.fire_laser(sx + offset, sy - 10, vx=0, vy=-12, is_up=True)
                     if danger:
@@ -313,7 +317,7 @@ class Game:
                 deflect = lambda: (random.random() - 0.5) * miss_factor
                 if self.ship.aim_up:
                     # Fire UP at clouds (Massive 3-way spread + optional seeker)
-                    sx, sy = self.ship.x, self.ship.y
+                    sx, sy = ship_x, ship_y
                     self.fire_laser(sx,      sy - 10, vx=0, vy=-12, is_up=True)
                     self.fire_laser(sx - 15, sy - 5,  vx=0, vy=-12, is_up=True)
                     self.fire_laser(sx + 15, sy - 5,  vx=0, vy=-12, is_up=True)
@@ -323,10 +327,10 @@ class Game:
                         self.fire_laser(sx, sy - 10, vx=vx, vy=-12, is_up=True)
                 else:
                     # Fire RIGHT at aliens
-                    self.fire_laser(self.ship.x + 10, self.ship.y, vy=deflect())
+                    self.fire_laser(ship_x + 10, ship_y, vy=deflect())
                     if is_danger:
-                        self.fire_laser(self.ship.x, self.ship.y - 15, vy=deflect())
-                        self.fire_laser(self.ship.x, self.ship.y + 15, vy=deflect())
+                        self.fire_laser(ship_x, ship_y - 15, vy=deflect())
+                        self.fire_laser(ship_x, ship_y + 15, vy=deflect())
                 self.ship.recoil = 5
                 self.buzzer.set_tone(1500 if is_danger else 1200)
             else:
