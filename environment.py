@@ -131,3 +131,16 @@ class Environment:
                         d.rectangle(hx + 3, 240 - h[2] + 4, 4, 5)
                         if h[1] >= 20:
                             d.rectangle(hx + 12, 240 - h[2] + 4, 4, 5)
+
+    def check_house_damage(self, x, y, t):
+        """Checks if a point (x, y) hit any house, accounting for scroll."""
+        scroll = (t * 2) % 320
+        # Iterate backwards to safely remove items while iterating
+        for i in range(len(self.houses) - 1, -1, -1):
+            h = self.houses[i]
+            for ox in [-320, 0, 320]: # Check all wrap-around instances
+                hx = h[0] - scroll + ox
+                if hx < x < hx + h[1] and 240 - h[2] < y < 240:
+                    self.houses.pop(i)
+                    return True
+        return False

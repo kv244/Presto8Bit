@@ -49,10 +49,16 @@ class Ship:
         self.pen_hull_day    = display.create_pen(20, 20, 20)
         self.pen_hull_night  = display.create_pen(230, 240, 255)
 
-    def update(self, t):
-        # Complex Lissajous figure for more varied movement
-        self.y = int(120 + math.sin(t/14) * 45 + math.cos(t/9) * 25)
-        self.x = int(45 + math.sin(t/11) * 20)
+    def update(self, t, boss_mode=False):
+        if boss_mode:
+            # Eratic, complex evasive maneuvers for boss fight
+            self.y = int(120 + math.sin(t/10) * 60 + math.cos(t/6) * 30 + math.sin(t/3) * 10)
+            self.x = int(60 + math.sin(t/8) * 35 + math.cos(t/5) * 15)
+        else:
+            # Complex Lissajous figure for more varied movement
+            self.y = int(120 + math.sin(t/14) * 45 + math.cos(t/9) * 25)
+            self.x = int(45 + math.sin(t/11) * 20)
+        
         if self.recoil > 0: self.recoil -= 1
 
     def draw(self, is_night):

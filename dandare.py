@@ -175,7 +175,7 @@ class Game:
 
         # Environment & ship
         self.env.update(self.t % (self.PHASE_LEN * 4), self.PHASE_LEN)
-        self.ship.update(self.t)
+        self.ship.update(self.t, self.boss_active)
         ship_x = self.ship.x
         ship_y = self.ship.y
 
@@ -284,6 +284,12 @@ class Game:
                     _rain_live[i] = False
                     self.spawn_particles(_rain_x[i], _rain_y[i], 2, is_water=True)
                     continue
+                
+                # Check house damage from rain
+                if self.env.check_house_damage(_rain_x[i], _rain_y[i], self.t):
+                    _rain_live[i] = False
+                    self.spawn_particles(_rain_x[i], _rain_y[i], 4, is_water=True)
+                    continue
 
                 if _rain_y[i] > 240:
                     self.spawn_particles(_rain_x[i], 240,
@@ -337,7 +343,8 @@ class Game:
                 continue
             dx = ship_x - a.x; dy = ship_y - a.y
             if dx*dx + dy*dy < 100:
-                self.score -= 50
+                penalty = 150 if self.boss_active else 50
+                self.score -= penalty
                 self.impact_timer = 15
                 self.spawn_particles(ship_x, ship_y, 20)
                 a.active = False
