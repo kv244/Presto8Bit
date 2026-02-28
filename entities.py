@@ -188,6 +188,11 @@ class Pool:
         """Iterate only active objects without creating a copy list."""
         return self._pool  # caller checks .active
 
+    def clear(self):
+        """Deactivate all objects in the pool."""
+        for obj in self._pool:
+            obj.active = False
+
 
 # Pool sizes: sized generously for worst-case bursts
 ALIEN_POOL        = Pool(Alien,        30)

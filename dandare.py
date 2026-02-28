@@ -53,6 +53,13 @@ class Game:
         self.buzzer  = Buzzer(Pin(43))
 
         # 2. Subsystems
+        # Clear global pools & rain if this is a restart
+        ALIEN_POOL.clear()
+        LASER_POOL.clear()
+        ENEMY_LASER_POOL.clear()
+        PARTICLE_POOL.clear()
+        for i in range(_RAIN_MAX): _rain_live[i] = False
+
         self.env  = Environment(self.display)
         self.ship = Ship(self.display)
 
@@ -70,7 +77,7 @@ class Game:
 
         # Boss fight state
         self.boss_active        = False
-        self.boss_next_threshold = 100   # first boss triggers at score 100
+        self.boss_next_threshold = self.score + 100   # first boss triggers 100pts after start
         self.boss_defeat_timer  = 0      # frames to show "BOSS DEFEATED!"
         
         # Nuclear Bomb state
