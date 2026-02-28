@@ -254,8 +254,8 @@ class Game:
         # All aliens fire back — each active alien has a small frame chance
         for a in ALIEN_POOL.active_objects():
             if a.active:
-                # Normal aliens fire at 0.3%, boss aliens fire at 1.0%
-                fire_chance = 0.99 if a.is_boss else 0.997
+                # Normal aliens fire at 0.3%, boss aliens fire at 6.0% (bullet hell)
+                fire_chance = 0.94 if a.is_boss else 0.997
                 if random.random() > fire_chance:
                     el = ENEMY_LASER_POOL.get()
                     if el is not None:
