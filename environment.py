@@ -15,7 +15,8 @@ class Environment:
             random.randint(0, 320), random.randint(20, 50), random.uniform(0.2, 0.4),
             (random.randint(140, 180), random.randint(190, 230), 255)
         ] for _ in range(5)]
-        self.houses = [[random.randint(0, 319), random.randint(10, 25), random.randint(15, 40)] for _ in range(12)]
+        # Houses: [x, width, height, health]
+        self.houses = [[random.randint(0, 319), random.randint(10, 25), random.randint(15, 40), random.randint(3, 7)] for _ in range(12)]
 
         self.DAY_SKY    = (245, 245, 250)
         self.SUNSET_SKY = (255, 100, 50)
@@ -77,7 +78,7 @@ class Environment:
             scroll = (cycle_timer * 2) % 320
             # Put it at a position that will scroll in from the right
             new_x = (scroll + 320 + random.randint(0, 50)) % 320
-            self.houses.append([new_x, random.randint(10, 25), random.randint(15, 40)])
+            self.houses.append([new_x, random.randint(10, 25), random.randint(15, 40), random.randint(3, 7)])
 
     def draw_layer0(self, t):
         d = self.display
@@ -152,6 +153,8 @@ class Environment:
             for ox in [-320, 0, 320]: # Check all wrap-around instances
                 hx = h[0] - scroll + ox
                 if hx < x < hx + h[1] and 240 - h[2] < y < 240:
-                    self.houses.pop(i)
+                    h[3] -= 1 # damage health
+                    if h[3] <= 0:
+                        self.houses.pop(i)
                     return True
         return False

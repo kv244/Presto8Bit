@@ -83,19 +83,20 @@ class Alien:
 
 
 class Laser:
-    __slots__ = ('x', 'y', 'active')
+    __slots__ = ('x', 'y', 'vy', 'active')
 
     def __init__(self):
         self.active = False
         self.x = 0; self.y = 0
 
-    def reset(self, x, y):
-        self.x = x; self.y = y
+    def reset(self, x, y, vy=0):
+        self.x = x; self.y = y; self.vy = vy
         self.active = True
 
     def update(self):
         self.x += 12
-        if self.x > 340:
+        self.y += self.vy
+        if self.x > 340 or self.y < -20 or self.y > 260:
             self.active = False
 
     def draw(self, display, pen):
@@ -105,19 +106,20 @@ class Laser:
 
 class EnemyLaser:
     """Alien projectile — travels leftward toward the ship."""
-    __slots__ = ('x', 'y', 'active')
+    __slots__ = ('x', 'y', 'vy', 'active')
 
     def __init__(self):
         self.active = False
-        self.x = 0; self.y = 0
+        self.x = 0; self.y = 0; self.vy = 0
 
-    def reset(self, x, y):
-        self.x = x; self.y = y
+    def reset(self, x, y, vy=0):
+        self.x = x; self.y = y; self.vy = vy
         self.active = True
 
     def update(self):
-        self.x -= 10          # moves left
-        if self.x < -20:
+        self.x -= 10
+        self.y += self.vy
+        if self.x < -20 or self.y < -20 or self.y > 260:
             self.active = False
 
     def draw(self, display, pen):

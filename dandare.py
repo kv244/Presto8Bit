@@ -140,10 +140,10 @@ class Game:
                 move_speed=3.5    # much faster than normal seekers (1.8)
             )
 
-    def fire_laser(self, x, y):
+    def fire_laser(self, x, y, vy=0):
         l = LASER_POOL.get()
         if l is not None:
-            l.reset(x, y)
+            l.reset(x, y, vy)
 
     def spawn_particles(self, x, y, count, is_water=False):
         for _ in range(count):
@@ -217,19 +217,27 @@ class Game:
         if self.boss_defeat_timer > 0:
             self.boss_defeat_timer -= 1
 
-        # Firing — rate scales with aliens on screen; super-fire mode during boss
+        # Firing — rate scales with aliens; and house count affects fire rate/accuracy
         alien_count = sum(1 for a in ALIEN_POOL.active_objects() if a.active)
+        house_count = len(self.env.houses)
         is_danger   = self.score <= 50
+        
+        # House-based modifiers: more houses = more/better fire
+        fire_rate_penalty = (12 - house_count) * 0.015
+        miss_factor = (12 - house_count) * 0.35
+
         if self.boss_active:
             # SUPER FIRE: low threshold, 5-way spread
-            fire_threshold = max(0.35, 0.80 - alien_count * 0.02)
+            fire_threshold = max(0.35, 0.80 - alien_count * 0.02 + fire_rate_penalty)
             if alien_count > 0 and random.random() > fire_threshold:
                 sx = self.ship.x; sy = self.ship.y
-                self.fire_laser(sx + 10, sy)         # centre
-                self.fire_laser(sx + 5,  sy - 15)   # spread up
-                self.fire_laser(sx + 5,  sy + 15)   # spread down
-                self.fire_laser(sx,      sy - 30)   # wide up
-                self.fire_laser(sx,      sy + 30)   # wide down
+                # Each shot gets a small random deflection based on miss_factor
+                deflect = lambda: (random.random() - 0.5) * miss_factor
+                self.fire_laser(sx + 10, sy,       vy=deflect())          # centre
+                self.fire_laser(sx + 5,  sy - 15,  vy=deflect())   # spread up
+                self.fire_laser(sx + 5,  sy + 15,  vy=deflect())   # spread down
+                self.fire_laser(sx,      sy - 30,  vy=deflect())   # wide up
+                self.fire_laser(sx,      sy + 30,  vy=deflect())   # wide down
                 self.ship.recoil = 5
                 self.buzzer.set_tone(1800)
             else:
@@ -243,12 +251,13 @@ class Game:
                     self.buzzer.set_tone(0)
         else:
             base_threshold = 0.85 if is_danger else 0.96
-            fire_threshold = max(0.60, base_threshold - alien_count * 0.02)
+            fire_threshold = max(0.60, base_threshold - alien_count * 0.02 + fire_rate_penalty)
             if alien_count > 0 and random.random() > fire_threshold:
-                self.fire_laser(self.ship.x + 10, self.ship.y)
+                deflect = lambda: (random.random() - 0.5) * miss_factor
+                self.fire_laser(self.ship.x + 10, self.ship.y, vy=deflect())
                 if is_danger:
-                    self.fire_laser(self.ship.x, self.ship.y - 15)
-                    self.fire_laser(self.ship.x, self.ship.y + 15)
+                    self.fire_laser(self.ship.x, self.ship.y - 15, vy=deflect())
+                    self.fire_laser(self.ship.x, self.ship.y + 15, vy=deflect())
                 self.ship.recoil = 5
                 self.buzzer.set_tone(1500 if is_danger else 1200)
             else:
