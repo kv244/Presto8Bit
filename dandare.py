@@ -28,10 +28,13 @@ _rain_spd  = [0]  * _RAIN_MAX
 _rain_live = [False] * _RAIN_MAX
 _rain_len  = [0, _RAIN_MAX]   # [0]=wasted-slot cache hint, [1]=cap
 
-def _rain_spawn():
+def _rain_spawn(cloud_xs):
+    if not cloud_xs: return
     for i in range(_RAIN_MAX):
         if not _rain_live[i]:
-            _rain_x[i]   = random.randint(0, 320)
+            # Pick a random cloud and spawn rain near its center
+            cx = random.choice(cloud_xs)
+            _rain_x[i]   = cx + random.randint(-15, 15)
             _rain_y[i]   = 0
             _rain_spd[i] = random.randint(8, 12)
             _rain_live[i] = True
@@ -225,10 +228,11 @@ class Game:
             if random.random() > spawn_threshold:
                 self.spawn_alien()
         
-        # Rain scales strictly with cloud count (0.16 chance per cloud)
-        rain_chance = len(self.env.clouds) * 0.16
+        # Rain scales strictly with cloud count
+        cloud_xs = self.env.get_all_cloud_x(self.t)
+        rain_chance = len(cloud_xs) * 0.16
         if random.random() < rain_chance:
-            _rain_spawn()
+            _rain_spawn(cloud_xs)
 
         # Boss fight trigger
         if (not self.boss_active and

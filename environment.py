@@ -169,6 +169,10 @@ class Environment:
                     return True
         return False
 
+    def get_all_cloud_x(self, t):
+        """Returns a list of screen X coords for all active clouds."""
+        return [int((c[0] - t * c[2]) % 340) - 20 for c in self.clouds]
+
     def get_nearest_cloud_x(self, ship_x, t):
         """Returns the X coordinate of the cloud horizontally closest to ship_x."""
         if not self.clouds: return None
