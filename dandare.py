@@ -206,9 +206,10 @@ class Game:
         # Boss fights override upward aiming to focus on the threat
         self.ship.aim_up = (trouble or danger) if not self.boss_active else False
         self.ship.update(self.t)
-        # Visual ship position (for collisions and firing origin)
-        ship_x = self.ship.x + self.ship.ox
-        ship_y = self.ship.y + self.ship.oy
+        # Visual ship position (for collisions, firing origin AND halo)
+        self.ship_vx = self.ship.x + self.ship.ox
+        self.ship_vy = self.ship.y + self.ship.oy
+        ship_x, ship_y = self.ship_vx, self.ship_vy
 
         # Clamp the ship's anchor so it doesn't drift offscreen during autonomous movement
         self.ship.x = max(20, min(300, self.ship.x))
@@ -216,15 +217,20 @@ class Game:
 
         # Autonomous movement while aiming up: Glide under the target
         if self.ship.aim_up:
-            tx = ship_x
+            tx = self.ship.x
             if danger:
                 tx, _ = self.env.get_celestial_coords(self.t)
             elif trouble:
-                tx = self.env.get_nearest_cloud_x(ship_x, self.t)
+                tx = self.env.get_nearest_cloud_x(self.ship.x, self.t)
 
             if tx is not None:
                 if abs(self.ship.x - tx) > 3:
                     self.ship.x += 4 if self.ship.x < tx else -4
+        else:
+            # Return to home position (left side)
+            home_x = 45
+            if abs(self.ship.x - home_x) > 2:
+                self.ship.x += 2 if self.ship.x < home_x else -2
 
         # Spawning — suppressed during boss fight
         if not self.boss_active:
@@ -498,13 +504,13 @@ class Game:
         d.set_pen(self.pen_black)
         d.clear()
 
-        # Night-time: spotlight + dimming
+        # Night-time: spotlight + dimming (tracks visual ship position)
         if self.env.is_night:
             fast_dimmer(d, 0, 5, 20)
             d.set_pen(self.pen_halo)
-            d.circle(self.ship.x, self.ship.y, 42)
+            d.circle(self.ship_vx, self.ship_vy, 42)
             d.set_pen(self.pen_black)
-            d.circle(self.ship.x, self.ship.y, 40)
+            d.circle(self.ship_vx, self.ship_vy, 40)
 
         # Rain
         d.set_pen(self.pen_rain)
