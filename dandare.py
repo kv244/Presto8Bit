@@ -322,8 +322,9 @@ class Game:
         fire_rate_penalty = (12 - house_count) * 0.015
         miss_factor = (12 - house_count) * 0.35
 
-        if self.boss_active:
-            # BOSS FIRE: high frequency with cooldown if target present
+        is_horde = alien_count > 10
+        if self.boss_active or is_horde:
+            # HERO MODE: high frequency with cooldown if target present
             fire_threshold = max(0.20, 0.60 - alien_count * 0.02 + fire_rate_penalty)
             if self.ship.aim_up: fire_threshold = 0.15
 
