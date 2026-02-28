@@ -183,3 +183,17 @@ class Environment:
                     self.cloud_pens.pop(i)
                 return True
         return False
+
+    def check_celestial_damage(self, x, y, t):
+        """Checks if a point (x, y) hit the sun or moon."""
+        if self.is_night:
+            mx = int((320 * 0.7 - t * 0.2) % 320)
+            my = 50
+            dx = x - mx; dy = y - my
+            return (dx*dx + dy*dy) < 144
+        else:
+            sx = 260
+            sy = 40 + int(self.trans * 70)
+            dx = x - sx; dy = y - sy
+            return (dx*dx + dy*dy) < 676
+        return False

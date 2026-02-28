@@ -69,6 +69,10 @@ class Game:
         self.boss_active        = False
         self.boss_next_threshold = 100   # first boss triggers at score 100
         self.boss_defeat_timer  = 0      # frames to show "BOSS DEFEATED!"
+        
+        # Nuclear Bomb state
+        self.nuke_used = False
+        self.nuke_anim_timer = 0
 
         # 4. Pre-cache pens (avoids heap allocation every frame)
         d = self.display
@@ -183,8 +187,11 @@ class Game:
         # Environment & ship
         self.env.update(self.t % (self.PHASE_LEN * 4), self.PHASE_LEN)
         self.ship.boss_mode = self.boss_active
-        # Ship aims up if village is in trouble (< 6 houses)
-        self.ship.aim_up = len(self.env.houses) < 6
+        # Ship aims up if village is in trouble and clouds exist
+        # OR if ship is in serious danger (< 25 score) to allow nuke
+        trouble = len(self.env.houses) < 6 and len(self.env.clouds) > 0
+        danger  = self.score < 25 and not self.nuke_used
+        self.ship.aim_up = trouble or danger
         self.ship.update(self.t)
         ship_x = self.ship.x
         ship_y = self.ship.y
@@ -253,7 +260,10 @@ class Game:
                 self.ship.recoil = 5
                 self.buzzer.set_tone(1800)
             else:
-                if self.impact_timer > 0:
+                if self.nuke_anim_timer > 0:
+                    self.buzzer.set_tone(random.randint(50, 150))
+                    self.nuke_anim_timer -= 1
+                elif self.impact_timer > 0:
                     self.buzzer.set_tone(random.randint(50, 250))
                     self.impact_timer -= 1
                 elif self.explode_timer > 0:
@@ -278,7 +288,10 @@ class Game:
                 self.ship.recoil = 5
                 self.buzzer.set_tone(1500 if is_danger else 1200)
             else:
-                if self.impact_timer > 0:
+                if self.nuke_anim_timer > 0:
+                    self.buzzer.set_tone(random.randint(50, 150))
+                    self.nuke_anim_timer -= 1
+                elif self.impact_timer > 0:
                     self.buzzer.set_tone(random.randint(50, 250))
                     self.impact_timer -= 1
                 elif self.explode_timer > 0:
@@ -357,14 +370,27 @@ class Game:
                 continue
             lx = l.x; ly = l.y
 
-            # Cloud check (if firing up)
+            # Cloud/Celestial check (if firing up)
             if l.is_up:
                 if self.env.check_cloud_damage(lx, ly, self.t):
                     self.explode_timer = 2
                     self.spawn_particles(lx, ly, 4, is_water=True)
                     l.active = False
                     continue
-
+                # NUKE CHECK: Shoot the sun/moon to wipe the screen
+                if self.score < 25 and not self.nuke_used:
+                    if self.env.check_celestial_damage(lx, ly, self.t):
+                        print("Nuclear")
+                        self.nuke_used = True
+                        self.nuke_anim_timer = 60
+                        # Clear everything
+                        for a in ALIEN_POOL.active_objects(): a.active = False
+                        for el in ENEMY_LASER_POOL.active_objects(): el.active = False
+                        self.env.clouds = []
+                        self.env.cloud_pens = []
+                        l.active = False
+                        continue
+            
             for a in ALIEN_POOL.active_objects():
                 if not a.active:
                     continue
