@@ -102,7 +102,7 @@ class Game:
 
         # Boss fight state
         self.boss_active        = False
-        self.boss_next_threshold = self.score + 100   # first boss triggers 100pts after start
+        self.boss_next_threshold = self.score + 500   # First boss after 500pts
         self.boss_defeat_timer  = 0      # frames to show "BOSS DEFEATED!"
         
         # Nuclear Bomb state
@@ -359,7 +359,7 @@ class Game:
             if not boss_alive:
                 self.boss_active = False
                 self.score += 50                       # bonus for clearing the swarm
-                self.boss_next_threshold = self.score + 200  # next boss further away
+                self.boss_next_threshold = self.score + 1000 # Next boss much further away
                 self.boss_defeat_timer = 180           # show "BOSS DEFEATED!" for ~3s
 
         # Boss defeat message countdown
