@@ -665,6 +665,47 @@ class Game:
                 self._gc_countdown = 300  # plenty of memory, check again in 300 frames
 
     # -----------------------------------------------------------------------
+    def _update_leds(self):
+        """Drive the 7 ambient LEDs to reflect game state."""
+        p = self.presto
+        t = self.t
+
+        if self.game_over and self.pause_timer > 0:
+            # SHIP DESTROYED: hard red flash alternating with off
+            on = (t // 4) % 2 == 0
+            v = 255 if on else 0
+            for i in range(7):
+                p.set_led_rgb(i, v, 0, 0)
+
+        elif self.pause_timer > 0:
+            # HOURLY VICTORY: warm gold pulse (full brightness, fading)
+            # pause_timer counts down from 250; use it to drive brightness
+            brightness = min(255, self.pause_timer)
+            flash = (t // 6) % 2 == 0
+            r = brightness if flash else brightness // 3
+            g = brightness // 2 if flash else brightness // 8
+            for i in range(7):
+                p.set_led_rgb(i, r, g, 0)
+
+        elif self.env.is_night:
+            # NIGHT STARFIELD: each LED twinkles independently
+            # Uses a simple deterministic formula — no allocations
+            for i in range(7):
+                # Each LED has a different phase offset so they don't all sync
+                phase = (t + i * 17) % 31
+                if phase < 4:
+                    # Brief bright white twinkle
+                    bri = (4 - phase) * 60
+                    p.set_led_rgb(i, bri, bri, bri)
+                else:
+                    p.set_led_rgb(i, 0, 0, 0)
+
+        else:
+            # Daytime / boss fight — LEDs off
+            for i in range(7):
+                p.set_led_rgb(i, 0, 0, 0)
+
+    # -----------------------------------------------------------------------
     def draw(self):
         d = self.display
 
@@ -763,6 +804,7 @@ class Game:
             else:
                 self.draw_hud("HOURLY VICTORY!", 70, 100, 2)
 
+        self._update_leds()
         self.presto.update()
 
     # -----------------------------------------------------------------------
