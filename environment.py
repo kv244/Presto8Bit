@@ -16,6 +16,8 @@ class Environment:
         ] for _ in range(5)]
         # Houses: [x, width, height, health]
         self.houses = [[random.randint(0, 319), random.randint(10, 25), random.randint(15, 40), random.randint(3, 7)] for _ in range(12)]
+        
+        self._cloud_x_buf = [0] * 5  # Pre-allocated buffer to avoid per-frame list churn
 
         self.DAY_SKY    = (245, 245, 250)
         self.SUNSET_SKY = (255, 100, 50)
@@ -44,26 +46,33 @@ class Environment:
         self._pen_house    = 0
 
     def update(self, cycle_timer, PHASE_LEN):
-        if cycle_timer < PHASE_LEN:
-            self.sky_p, self.trans, self.is_night = (
-                self.display.create_pen(*self.DAY_SKY), 0.0, False)
-        elif cycle_timer < PHASE_LEN * 2:
-            lt = (cycle_timer - PHASE_LEN) / PHASE_LEN
-            self.sky_p = (get_asm_pen(self.display, self.DAY_SKY, self.SUNSET_SKY, lt)
-                          if lt < 0.5
-                          else get_asm_pen(self.display, self.SUNSET_SKY, self.NIGHT_SKY, (lt-0.5)*2))
-            self.trans, self.is_night = lt, lt > 0.5
-        elif cycle_timer < PHASE_LEN * 3:
-            self.sky_p, self.trans, self.is_night = (
-                self.display.create_pen(*self.NIGHT_SKY), 1.0, True)
-        else:
-            lt = (cycle_timer - PHASE_LEN * 3) / PHASE_LEN
-            self.sky_p = get_asm_pen(self.display, self.NIGHT_SKY, self.DAY_SKY, lt)
-            self.trans, self.is_night = 1.0 - lt, lt < 0.5
-
         # Rebuild interpolated pens only when trans actually changes
         # (quantise to 2 decimal places — 100 distinct values vs 50 fps = ~2s between rebuilds)
         tr = int(self.trans * 100)
+        
+        if cycle_timer < PHASE_LEN:
+            new_trans, new_night = 0.0, False
+            if tr != self._last_trans:
+                self.sky_p = self.display.create_pen(*self.DAY_SKY)
+        elif cycle_timer < PHASE_LEN * 2:
+            lt = (cycle_timer - PHASE_LEN) / PHASE_LEN
+            new_trans, new_night = lt, lt > 0.5
+            if tr != self._last_trans:
+                self.sky_p = (get_asm_pen(self.display, self.DAY_SKY, self.SUNSET_SKY, lt)
+                              if lt < 0.5
+                              else get_asm_pen(self.display, self.SUNSET_SKY, self.NIGHT_SKY, (lt-0.5)*2))
+        elif cycle_timer < PHASE_LEN * 3:
+            new_trans, new_night = 1.0, True
+            if tr != self._last_trans:
+                self.sky_p = self.display.create_pen(*self.NIGHT_SKY)
+        else:
+            lt = (cycle_timer - PHASE_LEN * 3) / PHASE_LEN
+            new_trans, new_night = 1.0 - lt, lt < 0.5
+            if tr != self._last_trans:
+                self.sky_p = get_asm_pen(self.display, self.NIGHT_SKY, self.DAY_SKY, lt)
+        
+        self.trans, self.is_night = new_trans, new_night
+
         if tr != self._last_trans:
             self._last_trans = tr
             d = self.display
@@ -86,7 +95,8 @@ class Environment:
                 (random.randint(140, 180), random.randint(190, 230), 255), 3
             ])
             # Regenerate pens to match count (simple for now)
-            self.cloud_pens = [self.display.create_pen(*c[3]) for c in self.clouds]
+            new_c = self.clouds[-1]
+            self.cloud_pens.append(self.display.create_pen(*new_c[3]))
 
     def draw_layer0(self, t):
         d = self.display
@@ -169,8 +179,15 @@ class Environment:
         return False
 
     def get_all_cloud_x(self, t):
-        """Returns a list of screen X coords for all active clouds."""
-        return [int((c[0] - t * c[2]) % 340) - 20 for c in self.clouds]
+        """Returns the number of clouds and populates their screen X into internal buffer."""
+        # Using the list as a buffer to avoid per-frame allocation
+        count = len(self.clouds)
+        for i in range(count):
+            c = self.clouds[i]
+            # Ensure we don't return more than 5 (our usual max)
+            if i >= 5: break
+            self._cloud_x_buf[i] = int((c[0] - t * c[2]) % 340) - 20
+        return count
 
     def get_nearest_cloud_x(self, ship_x, t):
         """Returns the X coordinate of the cloud horizontally closest to ship_x."""

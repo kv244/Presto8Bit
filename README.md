@@ -52,7 +52,26 @@ To maintain high FPS on the RP2350, critical path routines use specialized emitt
 *   **Layer 0**: Static/Slow-moving background elements (Sky, Sun/Moon, Parallax Mountains, Clouds).
 *   **Layer 1**: High-frequency gameplay elements (Aliens, Lasers, Particles, Ship).
 
+### 3. Memory Safety & Stability
+*   **Zero-division Guard:** Homing alien AI clamps minimum distance to prevent `NaN` propagation into `int()` draw calls—a hard freeze on MicroPython.
+*   **Incremental Cloud Pen Allocation:** Respawned clouds append a single new pen slot rather than rebuilding the entire `cloud_pens` list, preventing pen-slot exhaustion across multiple weather cycles.
+*   **Targeted GC Windows:** `gc.collect()` is called at two high-value moments—immediately when a boss swarm is defeated (reclaiming all 16 alien objects at once) and at the start of each game reset (before new `Environment`/`Ship` objects are allocated), minimising peak heap pressure.
+*   **`__slots__` on All Entity Classes:** `Alien`, `Laser`, `EnemyLaser`, `Particle`, and `Game` all declare `__slots__`, eliminating per-instance `__dict__` overhead and ensuring strict attribute safety on MicroPython.
+
 ## 🎮 How to Play
 1. Upload all `.py` files to the root directory of your Presto.
 2. Run `main.py` and launch `dandare.py`.
 3. Protect the village! Use the "Nuclear" option (shoot the Sun/Moon) only when in absolute peril. High Score is saved to `highscore.txt`.
+
+## 🤖 Future Development: Machine Learning
+The repository includes a "Fly-by-wire" system designed for End-to-End Imitation Learning and Reinforcement Learning:
+
+*   **`telemetry.py` (The Black Box)**: Captures a normalized **State Vector**, expert actions, and rewards every frame.
+*   **`headless.py` & `sim.py` (The Simulator)**: A mock hardware shim and training harness that allows the game to run on a PC as an OpenAI Gym-style environment at **1000+ FPS**.
+*   **`dandare-ml.py` & `utils-ml.py`**: Specialized versions for model inference and high-speed data generation.
+
+### The ML Workflow:
+1.  **Record**: Run `dandare.py` on Presto with telemetry to capture expert human/rule-based play.
+2.  **Train**: Use the captured CSV on a PC to train a neural network (e.g., via Behavioral Cloning).
+3.  **Simulate**: Use `sim.py` to stress-test the trained model at high speed in the headless environment.
+4.  **Deploy**: Upload the model to the Presto and watch an AI-driven Dan Dare protect the village!

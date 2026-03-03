@@ -49,12 +49,12 @@ _rain_spd  = [0]  * _RAIN_MAX
 _rain_live = [False] * _RAIN_MAX
 _rain_len  = [0, _RAIN_MAX]   # [0]=wasted-slot cache hint, [1]=cap
 
-def _rain_spawn(cloud_xs):
-    if not cloud_xs: return
+def _rain_spawn(cloud_count, cloud_buf):
+    if cloud_count == 0: return
     for i in range(_RAIN_MAX):
         if not _rain_live[i]:
             # Pick a random cloud and spawn rain near its center
-            cx = random.choice(cloud_xs)
+            cx = cloud_buf[random.randint(0, cloud_count - 1)]
             _rain_x[i]   = cx + random.randint(-15, 15)
             _rain_y[i]   = 0
             _rain_spd[i] = random.randint(8, 12)
@@ -63,18 +63,75 @@ def _rain_spawn(cloud_xs):
 
 
 class Game:
-    def __init__(self):
-        # 1. Hardware & Engine Setup
-        micropython.kbd_intr(-1)
-        try:
-            self.presto = Presto(full_res=False, layers=2)
-        finally:
-            micropython.kbd_intr(3)
+    __slots__ = ('presto', 'display', 'buzzer', 'env', 'ship', 'ship_vx', 'ship_vy',
+                 'score', 'game_over', 't', 'PHASE_LEN', 'pause_timer', 'time_check_counter',
+                 'last_hour_checked', 'impact_timer', 'explode_timer', 'boss_active',
+                 'boss_next_threshold', 'boss_defeat_timer', 'nuke_used', 'nuke_anim_timer',
+                 'cloud_revert_timer', 'pen_shadow', 'pen_hud', 'pen_rain', 'pen_laser',
+                 'pen_up_laser', 'pen_particle', 'pen_water', 'pen_alien_body',
+                 'pen_alien_glow', 'pen_halo', 'pen_black', 'pen_boss_border',
+                 'pen_boss_hud', 'pen_boss_shadow', 'pen_boss_alien_body',
+                 'pen_boss_alien_glow', 'pen_enemy_laser', 'pen_night_dim', 'high_score',
+                 '_gc_countdown', '_cloud_eraser_offsets',
+                 '_score_str', '_hi_str', '_last_score_drawn', '_last_hi_drawn')
+
+    def __init__(self, presto=None):
+        # 1. Hardware & Engine Setup (persistent)
+        if presto is None:
+            micropython.kbd_intr(-1)
+            try:
+                self.presto = Presto(full_res=False, layers=2)
+            finally:
+                micropython.kbd_intr(3)
+        else:
+            self.presto = presto
+            
         self.display = self.presto.display
         self.buzzer  = Buzzer(Pin(43))
 
+        # 4. Pre-cache pens (avoids heap allocation every frame)
+        d = self.display
+        self.pen_shadow    = d.create_pen(30, 0, 50)
+        self.pen_hud       = d.create_pen(255, 30, 180)
+        self.pen_rain      = d.create_pen(80, 80, 90)
+        self.pen_laser     = d.create_pen(0, 255, 255)
+        self.pen_up_laser  = d.create_pen(255, 255, 100) # Golden-yellow for clouds
+        self.pen_particle  = d.create_pen(255, 150, 0)
+        self.pen_water     = d.create_pen(160, 210, 255)
+        self.pen_alien_body= d.create_pen(50, 200, 50)
+        self.pen_alien_glow= d.create_pen(100, 255, 100)
+        self.pen_halo      = d.create_pen(60, 90, 120)
+        self.pen_black     = 0
+        # Boss-specific pens
+        self.pen_boss_border = d.create_pen(220, 0, 0)
+        self.pen_boss_hud    = d.create_pen(255, 60, 0)
+        self.pen_boss_shadow = d.create_pen(80, 0, 0)
+        self.pen_boss_alien_body = d.create_pen(220, 30, 30)
+        self.pen_boss_alien_glow = d.create_pen(255, 80, 80)
+        self.pen_enemy_laser     = d.create_pen(255, 80, 0)  # red-orange bolt
+        self.pen_night_dim       = d.create_pen(0, 5, 20)    # static night dimmer
+        
+        # High score persistence
+        try:
+            with open("highscore.txt", "r") as f:
+                self.high_score = int(f.read())
+        except:
+            self.high_score = 0
+
+        self._cloud_eraser_offsets = [-45, -30, -15, 0, 15, 30, 45]
+        
+        # Cache HUD strings to avoid per-frame heap churn
+        self._score_str = ""
+        self._hi_str    = ""
+        self._last_score_drawn = -1
+        self._last_hi_drawn    = -1
+        
+        self.reset()
+
+    def reset(self):
+        # Free old subsystem memory before allocating new ones
+        gc.collect()
         # 2. Subsystems
-        # Clear global pools & rain if this is a restart
         ALIEN_POOL.clear()
         LASER_POOL.clear()
         ENEMY_LASER_POOL.clear()
@@ -100,46 +157,13 @@ class Game:
         self.impact_timer  = 0
         self.explode_timer = 0
 
-        # Boss fight state
         self.boss_active        = False
-        self.boss_next_threshold = self.score + 500   # First boss after 500pts
-        self.boss_defeat_timer  = 0      # frames to show "BOSS DEFEATED!"
+        self.boss_next_threshold = self.score + 500
+        self.boss_defeat_timer  = 0
         
-        # Nuclear Bomb state
         self.nuke_used = False
         self.nuke_anim_timer = 0
         self.cloud_revert_timer = 0
-
-        # 4. Pre-cache pens (avoids heap allocation every frame)
-        d = self.display
-        self.pen_shadow    = d.create_pen(30, 0, 50)
-        self.pen_hud       = d.create_pen(255, 30, 180)
-        self.pen_rain      = d.create_pen(80, 80, 90)
-        self.pen_laser     = d.create_pen(0, 255, 255)
-        self.pen_up_laser  = d.create_pen(255, 255, 100) # Golden-yellow for clouds
-        self.pen_particle  = d.create_pen(255, 150, 0)
-        self.pen_water     = d.create_pen(160, 210, 255)
-        self.pen_alien_body= d.create_pen(50, 200, 50)
-        self.pen_alien_glow= d.create_pen(100, 255, 100)
-        self.pen_halo      = d.create_pen(60, 90, 120)
-        self.pen_black     = 0
-        # Boss-specific pens
-        self.pen_boss_border = d.create_pen(220, 0, 0)
-        self.pen_boss_hud    = d.create_pen(255, 60, 0)
-        self.pen_boss_shadow = d.create_pen(80, 0, 0)
-        self.pen_boss_alien_body = d.create_pen(220, 30, 30)
-        self.pen_boss_alien_glow = d.create_pen(255, 80, 80)
-        self.pen_enemy_laser     = d.create_pen(255, 80, 0)  # red-orange bolt
-        self.pen_night_dim       = d.create_pen(0, 5, 20)    # static night dimmer
-
-        # 5. High Score persistence
-        try:
-            with open("highscore.txt", "r") as f:
-                self.high_score = int(f.read())
-        except:
-            self.high_score = 0
-
-        # 6. GC budget: collect only when free memory drops below threshold
         self._gc_countdown = 0
 
     # -----------------------------------------------------------------------
@@ -158,9 +182,9 @@ class Game:
         # Elite alien chance: 15% chance to have 2HP (drawn in red like a mini-boss)
         is_elite = random.random() > 0.85
         a.reset(
-            (340, sy),
-            (random.randint(0, 320), random.randint(0, 240)),
-            (tx, sy + random.randint(-80, 80)),
+            340, sy,
+            random.randint(0, 320), random.randint(0, 240),
+            tx, sy + random.randint(-80, 80),
             random.randint(2, 5),
             is_seeker,
             is_boss=is_elite,
@@ -182,7 +206,7 @@ class Game:
             sx = int(cx + math.cos(angle) * radius)
             sy = int(cy + math.sin(angle) * radius)
             a.reset(
-                (sx, sy), (0, 0), (0, 0),
+                sx, sy, 0, 0, 0, 0,
                 speed=1,          
                 target=self.ship,
                 is_boss=True,
@@ -341,10 +365,10 @@ class Game:
                 self.spawn_alien()
         
         # Rain scales strictly with cloud count
-        cloud_xs = self.env.get_all_cloud_x(self.t)
-        rain_chance = len(cloud_xs) * 0.16
+        cloud_count = self.env.get_all_cloud_x(self.t)
+        rain_chance = cloud_count * 0.16
         if random.random() < rain_chance:
-            _rain_spawn(cloud_xs)
+            _rain_spawn(cloud_count, self.env._cloud_x_buf)
 
         # Boss fight trigger
         if (not self.boss_active and
@@ -355,12 +379,17 @@ class Game:
 
         # Boss fight end check
         if self.boss_active:
-            boss_alive = any(a.active and a.is_boss for a in ALIEN_POOL.active_objects())
+            boss_alive = False
+            for a in ALIEN_POOL._pool:
+                if a.active and a.is_boss:
+                    boss_alive = True
+                    break
             if not boss_alive:
                 self.boss_active = False
                 self.score += 50                       # bonus for clearing the swarm
                 self.boss_next_threshold = self.score + 1000 # Next boss much further away
                 self.boss_defeat_timer = 180           # show "BOSS DEFEATED!" for ~3s
+                gc.collect()                           # reclaim memory from the boss swarm
 
         # Boss defeat message countdown
         if self.boss_defeat_timer > 0:
@@ -407,7 +436,7 @@ class Game:
                     # Cloud Eraser: Massive 7-way fan
                     # If in danger, one laser targets the celestial body (Sun/Moon)
                     cx, cy = self.env.get_celestial_coords(self.t)
-                    for offset in [-45, -30, -15, 0, 15, 30, 45]:
+                    for offset in self._cloud_eraser_offsets:
                         self.fire_laser(sx + offset, sy - 10, vx=0, vy=-12, is_up=True)
                     if danger:
                         # Seeker laser: targets celestial body X
@@ -415,13 +444,14 @@ class Game:
                         self.fire_laser(sx, sy - 10, vx=vx, vy=-12, is_up=True)
                 else:
                     # MASSIVE FIREPOWER: 7-way spread, overlapping streams
-                    self.fire_laser(sx + 10, sy,       vx=14, vy=deflect())   # centre
-                    self.fire_laser(sx + 5,  sy - 12,  vx=13, vy=deflect()-1) # up
-                    self.fire_laser(sx + 5,  sy + 12,  vx=13, vy=deflect()+1) # down
-                    self.fire_laser(sx,      sy - 24,  vx=12, vy=deflect()-2) # wide up
-                    self.fire_laser(sx,      sy + 24,  vx=12, vy=deflect()+2) # wide down
-                    self.fire_laser(sx - 5,  sy - 36,  vx=11, vy=deflect()-3) # extreme up
-                    self.fire_laser(sx - 5,  sy + 36,  vx=11, vy=deflect()+3) # extreme down
+                    deflect_val = (random.random() - 0.5) * miss_factor
+                    self.fire_laser(sx + 10, sy,       vx=14, vy=deflect_val)   # centre
+                    self.fire_laser(sx + 5,  sy - 12,  vx=13, vy=deflect_val-1) # up
+                    self.fire_laser(sx + 5,  sy + 12,  vx=13, vy=deflect_val+1) # down
+                    self.fire_laser(sx,      sy - 24,  vx=12, vy=deflect_val-2) # wide up
+                    self.fire_laser(sx,      sy + 24,  vx=12, vy=deflect_val+2) # wide down
+                    self.fire_laser(sx - 5,  sy - 36,  vx=11, vy=deflect_val-3) # extreme up
+                    self.fire_laser(sx - 5,  sy + 36,  vx=11, vy=deflect_val+3) # extreme down
                 
                 self.ship.recoil = 5
                 # Ultra fast cooldown for massive fire
@@ -447,7 +477,7 @@ class Game:
 
             if (self.ship.aim_up or alien_count > 0) and should_fire:
                 self.ship.fire_cooldown = 4 # slightly slower in regular mode
-                deflect = lambda: (random.random() - 0.5) * miss_factor
+                deflect_val = (random.random() - 0.5) * miss_factor
                 if self.ship.aim_up:
                     # Fire UP at clouds (Massive 3-way spread + optional seeker)
                     sx, sy = ship_x, ship_y
@@ -461,7 +491,7 @@ class Game:
                 else:
                     # Fire RIGHT at aliens with angular aiming (-60 to 60 deg)
                     target_a = self.get_nearest_alien(ship_x, ship_y)
-                    vx, vy = 12, deflect()
+                    vx, vy = 12, deflect_val
                     if target_a:
                         dx = target_a.x - ship_x
                         dy = target_a.y - ship_y
@@ -686,9 +716,16 @@ class Game:
 
         self.ship.draw(self.env.is_night, self.t)
 
-        # HUD
-        self.draw_hud(f"SCORE: {self.score}", 5, 5, 2)
-        self.draw_hud(f"HI: {self.high_score}", 240, 5, 2)
+        # HUD - Only regenerate strings when score changes
+        if self.score != self._last_score_drawn:
+            self._score_str = f"SCORE: {self.score}"
+            self._last_score_drawn = self.score
+        if self.high_score != self._last_hi_drawn:
+            self._hi_str = f"HI: {self.high_score}"
+            self._last_hi_drawn = self.high_score
+            
+        self.draw_hud(self._score_str, 5, 5, 2)
+        self.draw_hud(self._hi_str, 240, 5, 2)
 
         # Boss fight overlays
         if self.boss_active:
@@ -705,7 +742,10 @@ class Game:
             d.set_pen(self.pen_boss_hud)
             d.text("BOSS FIGHT!", 85, 25, 320, 2)
             # Remaining boss count
-            boss_left = sum(1 for a in ALIEN_POOL.active_objects() if a.active and a.is_boss)
+            boss_left = 0
+            for a in ALIEN_POOL._pool:
+                if a.active and a.is_boss:
+                    boss_left += 1
             d.set_pen(self.pen_boss_shadow)
             d.text(f"x{boss_left}", 162, 47, 320, 2)
             d.set_pen(self.pen_boss_hud)
@@ -733,7 +773,7 @@ class Game:
             if self.pause_timer > 0:
                 self.pause_timer -= 1
                 if self.pause_timer == 0 and self.game_over:
-                    self.__init__()   # Full restart
+                    self.reset()   # Soft restart, no hardware re-init
             time.sleep(0.02)
 
 

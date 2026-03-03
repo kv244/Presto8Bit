@@ -36,23 +36,23 @@ import gc; gc.collect()
 # ---------------------------------------------------------------------------
 
 class Alien:
-    __slots__ = ('p0', 'p1', 'p2', 't', 'speed', 'active', 'x', 'y', 'target',
+    __slots__ = ('p0x', 'p0y', 'p1x', 'p1y', 'p2x', 'p2y', 't', 'speed', 'active', 'x', 'y', 'target',
                  'is_boss', 'move_speed', 'hp')
 
     def __init__(self):
         self.active = False
         self.t = 0; self.speed = 1
         self.x = 0; self.y = 0
-        self.p0 = (0, 0); self.p1 = (0, 0); self.p2 = (0, 0)
+        self.p0x = 0; self.p0y = 0; self.p1x = 0; self.p1y = 0; self.p2x = 0; self.p2y = 0
         self.target = None
         self.is_boss = False
         self.move_speed = 1.8
         self.hp = 1
 
-    def reset(self, p0, p1, p2, speed, target=None, is_boss=False, move_speed=1.8, hp=1):
-        self.p0 = p0; self.p1 = p1; self.p2 = p2
+    def reset(self, p0x, p0y, p1x, p1y, p2x, p2y, speed, target=None, is_boss=False, move_speed=1.8, hp=1):
+        self.p0x = p0x; self.p0y = p0y; self.p1x = p1x; self.p1y = p1y; self.p2x = p2x; self.p2y = p2y
         self.t = 0; self.speed = speed
-        self.x = p0[0]; self.y = p0[1]
+        self.x = float(p0x); self.y = float(p0y)
         self.target = target
         self.is_boss = is_boss
         self.move_speed = move_speed
@@ -82,11 +82,8 @@ class Alien:
             if t > 256:
                 self.active = False
             else:
-                p0_0, p0_1 = self.p0
-                p1_0, p1_1 = self.p1
-                p2_0, p2_1 = self.p2
-                self.x = get_bezier_point(t, p0_0, p1_0, p2_0)
-                self.y = get_bezier_point(t, p0_1, p1_1, p2_1)
+                self.x = get_bezier_point(t, self.p0x, self.p1x, self.p2x)
+                self.y = get_bezier_point(t, self.p0y, self.p1y, self.p2y)
 
     def draw(self, display, body_pen, glow_pen):
         cx = int(self.x); cy = int(self.y)
