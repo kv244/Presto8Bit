@@ -73,7 +73,7 @@ class Game:
                  'pen_boss_hud', 'pen_boss_shadow', 'pen_boss_alien_body',
                  'pen_boss_alien_glow', 'pen_enemy_laser', 'pen_night_dim', 'high_score',
                  '_gc_countdown', '_cloud_eraser_offsets',
-                 '_score_str', '_hi_str', '_last_score_drawn', '_last_hi_drawn')
+                 '_score_str', '_hi_str', '_last_score_drawn', '_last_hi_drawn', 'in_intro')
 
     def __init__(self, presto=None):
         # 1. Hardware & Engine Setup (persistent)
@@ -137,6 +137,7 @@ class Game:
         self._last_score_drawn = -1
         self._last_hi_drawn    = -1
         
+        self.in_intro = True
         self.reset()
 
     def reset(self):
@@ -279,6 +280,25 @@ class Game:
                     self.high_score = self.score
                     with open("highscore.txt", "w") as f:
                         f.write(str(self.score))
+
+        if self.in_intro:
+            # Check for touch dismissal
+            self.presto.touch.poll()
+            if self.presto.touch.state:
+                self.in_intro = False
+                return
+            
+            # Check for joypad dismissal
+            if self.joypad:
+                try:
+                    _btn = self.joypad.read_buttons()
+                    # If any button is pressed, exit intro
+                    for b in _btn.values():
+                        if b: 
+                            self.in_intro = False
+                            return
+                except: pass
+            return
 
         if self.pause_timer > 0:
             return
@@ -860,6 +880,45 @@ class Game:
                 self.draw_hud("GAME OVER", 90, 100, 3)
             else:
                 self.draw_hud("HOURLY VICTORY!", 70, 100, 2)
+
+        if self.in_intro:
+            d = self.display
+            # Dim the background a bit
+            fast_dimmer(d, self.pen_boss_shadow)
+            
+            # MISSION Header
+            d.set_pen(self.pen_hud)
+            d.text("DAN DARE: PROCTOR OF THE VILLAGE", 10, 20, 320, 2)
+            
+            # Mission Info
+            d.set_pen(self.pen_alien_glow)
+            d.text("MISSION: Protect houses from Acid Rain & Aliens", 10, 45, 300, 2)
+            
+            # Controls Section
+            d.set_pen(self.pen_up_laser)
+            if self.joypad:
+                d.text("JOYPAD DETECTED - MANUAL MODE:", 10, 75, 300, 2)
+                d.set_pen(self.pen_water)
+                d.text("D-PAD : Move Ship", 20, 95, 300, 1)
+                d.text("A / + : Standard Fire", 20, 110, 300, 1)
+                d.text("B / - : SUPER FIRE (7-WAY)", 20, 125, 300, 1)
+                d.text("X / Y : AIM UP (Clear Clouds)", 20, 140, 300, 1)
+            else:
+                d.text("NO JOYPAD - AUTOPILOT ACTIVE", 10, 75, 300, 2)
+                d.set_pen(self.pen_water)
+                d.text("Ship will defend the village automatically.", 20, 95, 300, 1)
+
+            # Mechanics & Tips
+            d.set_pen(self.pen_particle)
+            d.text("PRO-TIPS:", 10, 165, 300, 2)
+            d.set_pen(self.pen_water)
+            d.text("- Shoot CLOUDS to stop toxic rain", 20, 185, 300, 1)
+            d.text("- Shoot SUN/MOON for NUKE screen-wipe", 20, 200, 300, 1)
+            d.text("- Alien +10 pts | Hit -50 pts", 20, 215, 300, 1)
+
+            d.set_pen(self.pen_boss_hud)
+            if (self.t // 15) % 2 == 0:
+                d.text("TOUCH SCREEN OR PRESS BUTTON TO START", 15, 227, 300, 1)
 
         self._update_leds()
         self.presto.update()
