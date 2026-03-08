@@ -63,7 +63,7 @@ def _rain_spawn(cloud_count, cloud_buf):
 
 
 class Game:
-    __slots__ = ('presto', 'display', 'buzzer', 'env', 'ship', 'ship_vx', 'ship_vy',
+    __slots__ = ('presto', 'display', 'buzzer', 'joypad', 'env', 'ship', 'ship_vx', 'ship_vy',
                  'score', 'game_over', 't', 'PHASE_LEN', 'pause_timer', 'time_check_counter',
                  'last_hour_checked', 'impact_timer', 'explode_timer', 'boss_active',
                  'boss_next_threshold', 'boss_defeat_timer', 'nuke_used', 'nuke_anim_timer',
@@ -88,6 +88,17 @@ class Game:
             
         self.display = self.presto.display
         self.buzzer  = Buzzer(Pin(43))
+
+        # Optional QWIIC joypad (QwSTPad) — graceful fallback to autopilot
+        try:
+            from machine import I2C as _I2C
+            from qwstpad import QwSTPad as _QwSTPad, DEFAULT_ADDRESS as _JP_ADDR
+            _i2c = _I2C(0, scl=41, sda=40)
+            self.joypad = _QwSTPad(_i2c, _JP_ADDR, show_address=False)
+            print("Joypad: connected")
+        except Exception as _e:
+            self.joypad = None
+            print(f"Joypad: not available ({_e})")
 
         # 4. Pre-cache pens (avoids heap allocation every frame)
         d = self.display
@@ -285,13 +296,41 @@ class Game:
         # CRITICAL: village almost gone OR score low
         is_critical = (self.score < 40 or len(self.env.houses) < 6)
         danger = is_critical and not self.nuke_used
-        
-        # Ship aims up if village is in trouble or in danger
-        # Boss fights normally override upward aiming UNLESS it's a critical danger
-        if self.boss_active:
-            self.ship.aim_up = danger
-        else:
-            self.ship.aim_up = trouble or danger
+
+        # ---- JOYPAD INPUT (overrides all autopilot when connected) ----
+        joypad_active = False
+        joypad_fire_right = False
+        joypad_fire_up    = False
+        joypad_super_fire = False
+        if self.joypad is not None:
+            try:
+                _btn = self.joypad.read_buttons()
+                joypad_active = True
+                # Movement: 4 px per frame, clamped below
+                if _btn['L']: self.ship.x -= 4
+                if _btn['R']: self.ship.x += 4
+                if _btn['U']: self.ship.y -= 4
+                if _btn['D']: self.ship.y += 4
+                
+                # Manual Aim Control (X/Y strictly)
+                _manual_aim_up_held = _btn['X'] or _btn['Y']
+                self.ship.aim_up = _manual_aim_up_held or danger  # danger always forces aim_up
+                
+                # Fire Mapping
+                joypad_fire_right = _btn['A'] or _btn['+']
+                joypad_super_fire = _btn['B'] or _btn['-']
+                joypad_fire_up    = self.ship.aim_up and (joypad_fire_right or joypad_super_fire)
+            except Exception:
+                # I2C hiccup — treat as no input this frame
+                joypad_active = False
+
+        if not joypad_active:
+            # Ship aims up if village is in trouble or in danger
+            # Boss fights normally override upward aiming UNLESS it's a critical danger
+            if self.boss_active:
+                self.ship.aim_up = danger
+            else:
+                self.ship.aim_up = trouble or danger
 
         self.ship.boss_mode = self.boss_active
         self.ship.nuke_ready = danger
@@ -308,49 +347,51 @@ class Game:
         is_horde = alien_count > 10
         near_a = self.get_nearest_alien(ship_x, ship_y)
 
-        # Autonomous movement while aiming up: Glide under the target
-        if self.ship.aim_up:
-            tx = self.ship.x
-            if danger:
-                tx, _ = self.env.get_celestial_coords(self.t)
-            elif trouble:
-                tx = self.env.get_nearest_cloud_x(self.ship.x, self.t)
+        if not joypad_active:
+            # ----- AUTOPILOT MOVEMENT -----
+            # Autonomous movement while aiming up: Glide under the target
+            if self.ship.aim_up:
+                tx = self.ship.x
+                if danger:
+                    tx, _ = self.env.get_celestial_coords(self.t)
+                elif trouble:
+                    tx = self.env.get_nearest_cloud_x(self.ship.x, self.t)
 
-            if tx is not None:
-                if abs(self.ship.x - tx) > 3:
-                    self.ship.x += 4 if self.ship.x < tx else -4
-        else:
-            # Return to home position (left side, UNLESS in boss fight/horde)
-            home_x = 160 if self.boss_active or is_horde else 45
-            
-            # ESCAPE PROTOCOL: If any alien is too close during swarm, move exactly opposite
-            if near_a and (self.boss_active or is_horde):
-                adx, ady = ship_x - near_a.x, ship_y - near_a.y
-                dist_sq = adx*adx + ady*ady
-                if dist_sq < 4225: # Inside 65px: DANGER!
-                    dist = math.sqrt(dist_sq)
-                    if dist > 0:
-                        # High-speed repulsion
-                        vx, vy = (adx / dist) * 6, (ady / dist) * 5
-                        
-                        # ANTI-STUCK: If hitting a boundary, sidestep perpendicular to the threat
-                        if (self.ship.x <= 20 or self.ship.x >= 300) and abs(vx) > 1:
-                            # If pinned horizontally, burst vertically
-                            self.ship.y += 5 if ady > 0 else -5
-                        if (self.ship.y <= 40 or self.ship.y >= 200) and abs(vy) > 1:
-                            # If pinned vertically, burst horizontally
-                            self.ship.x += 6 if adx > 0 else -6
+                if tx is not None:
+                    if abs(self.ship.x - tx) > 3:
+                        self.ship.x += 4 if self.ship.x < tx else -4
+            else:
+                # Return to home position (left side, UNLESS in boss fight/horde)
+                home_x = 160 if self.boss_active or is_horde else 45
+                
+                # ESCAPE PROTOCOL: If any alien is too close during swarm, move exactly opposite
+                if near_a and (self.boss_active or is_horde):
+                    adx, ady = ship_x - near_a.x, ship_y - near_a.y
+                    dist_sq = adx*adx + ady*ady
+                    if dist_sq < 4225: # Inside 65px: DANGER!
+                        dist = math.sqrt(dist_sq)
+                        if dist > 0:
+                            # High-speed repulsion
+                            vx, vy = (adx / dist) * 6, (ady / dist) * 5
                             
-                        self.ship.x += vx
-                        self.ship.y += vy
+                            # ANTI-STUCK: If hitting a boundary, sidestep perpendicular to the threat
+                            if (self.ship.x <= 20 or self.ship.x >= 300) and abs(vx) > 1:
+                                # If pinned horizontally, burst vertically
+                                self.ship.y += 5 if ady > 0 else -5
+                            if (self.ship.y <= 40 or self.ship.y >= 200) and abs(vy) > 1:
+                                # If pinned vertically, burst horizontally
+                                self.ship.x += 6 if adx > 0 else -6
+                                
+                            self.ship.x += vx
+                            self.ship.y += vy
+                    else:
+                        # No immediate death-spiral, return to home center
+                        if abs(self.ship.x - home_x) > 2:
+                            self.ship.x += 2 if self.ship.x < home_x else -2
                 else:
-                    # No immediate death-spiral, return to home center
+                    # Regular drift to home
                     if abs(self.ship.x - home_x) > 2:
                         self.ship.x += 2 if self.ship.x < home_x else -2
-            else:
-                # Regular drift to home
-                if abs(self.ship.x - home_x) > 2:
-                    self.ship.x += 2 if self.ship.x < home_x else -2
 
         # FINAL CLAMP: Move this to the end so evasion isn't choppy
         self.ship.x = max(20, min(300, self.ship.x))
@@ -416,15 +457,23 @@ class Game:
         miss_factor = (12 - house_count) * 0.35
 
         is_horde = alien_count > 10
-        if self.boss_active or is_horde:
+        if self.boss_active or is_horde or (joypad_active and joypad_super_fire):
             # HERO MODE: high frequency with cooldown if target present
             fire_threshold = max(0.20, 0.60 - alien_count * 0.02 + fire_rate_penalty)
             if self.ship.aim_up: fire_threshold = 0.15
 
             target_a = self.get_nearest_alien(ship_x, ship_y)
-            # Automatic fire is gated by the fire_cooldown for sustainability
-            should_fire = (random.random() > fire_threshold or triggered_by_halo or (target_a and not self.ship.aim_up))
-            should_fire = should_fire and (self.ship.fire_cooldown == 0)
+            # Joypad: fire buttons override probabilistic check
+            if joypad_active:
+                firing_up   = self.ship.aim_up and (joypad_fire_right or joypad_super_fire) and self.ship.fire_cooldown == 0
+                firing_side = not self.ship.aim_up and (joypad_fire_right or joypad_super_fire) and self.ship.fire_cooldown == 0
+                should_fire = firing_up or firing_side
+            else:
+                # Automatic fire is gated by the fire_cooldown for sustainability
+                should_fire = (random.random() > fire_threshold or triggered_by_halo or (target_a and not self.ship.aim_up))
+                should_fire = should_fire and (self.ship.fire_cooldown == 0)
+                firing_up   = should_fire and self.ship.aim_up
+                firing_side = should_fire and not self.ship.aim_up
 
             if (self.ship.aim_up or alien_count > 0) and should_fire:
                 sx, sy = ship_x, ship_y
@@ -432,7 +481,7 @@ class Game:
                 # Each shot gets a small random deflection based on miss_factor
                 deflect = lambda: (random.random() - 0.5) * miss_factor
                 
-                if self.ship.aim_up:
+                if firing_up:
                     # Cloud Eraser: Massive 7-way fan
                     # If in danger, one laser targets the celestial body (Sun/Moon)
                     cx, cy = self.env.get_celestial_coords(self.t)
@@ -455,7 +504,7 @@ class Game:
                 
                 self.ship.recoil = 5
                 # Ultra fast cooldown for massive fire
-                self.ship.fire_cooldown = 2 if not self.ship.aim_up else 3
+                self.ship.fire_cooldown = 2 if not firing_up else 3
                 self.buzzer.set_tone(1800)
             else:
                 if self.nuke_anim_timer > 0:
@@ -472,13 +521,21 @@ class Game:
             if self.ship.aim_up: fire_threshold = 0.40
 
             target_a = self.get_nearest_alien(ship_x, ship_y)
-            should_fire = (random.random() > fire_threshold or triggered_by_halo or (target_a and not self.ship.aim_up))
-            should_fire = should_fire and (self.ship.fire_cooldown == 0)
+            # Joypad: fire buttons override probabilistic check
+            if joypad_active:
+                firing_up   = self.ship.aim_up and joypad_fire_right and self.ship.fire_cooldown == 0
+                firing_side = not self.ship.aim_up and joypad_fire_right and self.ship.fire_cooldown == 0
+                should_fire = firing_up or firing_side
+            else:
+                should_fire = (random.random() > fire_threshold or triggered_by_halo or (target_a and not self.ship.aim_up))
+                should_fire = should_fire and (self.ship.fire_cooldown == 0)
+                firing_up   = should_fire and self.ship.aim_up
+                firing_side = should_fire and not self.ship.aim_up
 
             if (self.ship.aim_up or alien_count > 0) and should_fire:
                 self.ship.fire_cooldown = 4 # slightly slower in regular mode
                 deflect_val = (random.random() - 0.5) * miss_factor
-                if self.ship.aim_up:
+                if firing_up:
                     # Fire UP at clouds (Massive 3-way spread + optional seeker)
                     sx, sy = ship_x, ship_y
                     self.fire_laser(sx,      sy - 10, vx=0, vy=-12, is_up=True)

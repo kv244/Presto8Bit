@@ -214,7 +214,7 @@ class Pool:
 
 # Pool sizes: tuned for high-performance without heap exhaustion
 ALIEN_POOL        = Pool(Alien,        24) # 30 -> 24
-LASER_POOL        = Pool(Laser,        25) # More lasers for 7-way spread
+LASER_POOL        = Pool(Laser,        64) # Increased for 7-way Super Fire spread
 PARTICLE_POOL     = Pool(Particle,     80) # 120 -> 80 (Large RAM saving)
 ENEMY_LASER_POOL  = Pool(EnemyLaser,   20)
 gc.collect()
