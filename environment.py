@@ -39,6 +39,10 @@ class Environment:
         self.pen_win_day   = d.create_pen(160, 200, 250)
         self.pen_win_night = d.create_pen(255, 255, 150)
 
+        # Pre-cache color tuples for interpolation (prevents heap churn)
+        self._C_BG_DAY   = (180, 210, 255); self._C_BG_NIGHT = (20, 15, 30)
+        self._C_FG_DAY   = (120, 160, 200); self._C_FG_NIGHT = (5, 5, 15)
+        self._C_HS_DAY   = (90, 110, 130);  self._C_HS_NIGHT = (10, 10, 15)
         # Pen cache for interpolated pens; invalidated when trans changes
         self._last_trans   = -1.0
         self._pen_bg       = 0
@@ -72,13 +76,14 @@ class Environment:
                 self.sky_p = get_asm_pen(self.display, self.NIGHT_SKY, self.DAY_SKY, lt)
         
         self.trans, self.is_night = new_trans, new_night
+        self._scroll = (cycle_timer * 2) % 320
 
         if tr != self._last_trans:
             self._last_trans = tr
             d = self.display
-            self._pen_bg    = get_asm_pen(d, (180, 210, 255), (20, 15, 30),  self.trans)
-            self._pen_fg    = get_asm_pen(d, (120, 160, 200), (5, 5, 15),    self.trans)
-            self._pen_house = get_asm_pen(d, (90, 110, 130),  (10, 10, 15),  self.trans)
+            self._pen_bg    = get_asm_pen(d, self._C_BG_DAY, self._C_BG_NIGHT,  self.trans)
+            self._pen_fg    = get_asm_pen(d, self._C_FG_DAY, self._C_FG_NIGHT,  self.trans)
+            self._pen_house = get_asm_pen(d, self._C_HS_DAY, self._C_HS_NIGHT,  self.trans)
 
         # Respawn houses if they were destroyed by rain
         if len(self.houses) < 12 and random.random() > 0.99:
@@ -98,6 +103,7 @@ class Environment:
             new_c = self.clouds[-1]
             self.cloud_pens.append(self.display.create_pen(*new_c[3]))
 
+    @micropython.native
     def draw_layer0(self, t):
         d = self.display
         d.set_layer(0)
@@ -165,7 +171,7 @@ class Environment:
 
     def check_house_damage(self, x, y, t):
         """Checks if a point (x, y) hit any house, accounting for scroll."""
-        scroll = (t * 2) % 320
+        scroll = self._scroll
         # Iterate backwards to safely remove items while iterating
         for i in range(len(self.houses) - 1, -1, -1):
             h = self.houses[i]
@@ -204,13 +210,14 @@ class Environment:
 
     def check_cloud_damage(self, x, y, t):
         """Checks if a point (x, y) hit any cloud."""
+        buf = self._cloud_x_buf
         for i in range(len(self.clouds) - 1, -1, -1):
-            c = self.clouds[i]
-            cx = int((c[0] - t * c[2]) % 340) - 20
-            cy = c[1]
+            cx = buf[i]
+            cy = self.clouds[i][1]
             
             # Rough bounding box for the cloud cluster
             if cx - 10 < x < cx + 25 and cy - 10 < y < cy + 10:
+                c = self.clouds[i]
                 c[4] -= 1 # damage health
                 if c[4] <= 0:
                     self.clouds.pop(i)

@@ -202,10 +202,6 @@ class Pool:
                 return obj
         return None  # pool exhausted - caller should skip
 
-    def active_objects(self):
-        """Iterate only active objects without creating a copy list."""
-        return self._pool  # caller checks .active
-
     def clear(self):
         """Deactivate all objects in the pool."""
         for obj in self._pool:

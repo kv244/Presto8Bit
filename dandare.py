@@ -266,6 +266,10 @@ class Game:
     def update(self):
         self.t = self.t + 1
         t = self.t
+        # Localization to avoid slow 'self' attribute lookups in the main loop
+        ship = self.ship; env = self.env; display = self.display; joypad = self.joypad
+        presto = self.presto; buzzer = self.buzzer; alien_pool = ALIEN_POOL._pool
+        laser_pool = LASER_POOL._pool; enemy_laser_pool = ENEMY_LASER_POOL._pool
 
         # Throttled RTC check — only call time.localtime() rarely
         self.time_check_counter = self.time_check_counter + 1
@@ -283,15 +287,15 @@ class Game:
 
         if self.in_intro:
             # Check for touch dismissal
-            self.presto.touch.poll()
-            if self.presto.touch.state:
+            presto.touch.poll()
+            if presto.touch.state:
                 self.in_intro = False
                 return
             
             # Check for joypad dismissal
-            if self.joypad:
+            if joypad:
                 try:
-                    _btn = self.joypad.read_buttons()
+                    _btn = joypad.read_buttons()
                     # If any button is pressed, exit intro
                     for b in _btn.values():
                         if b: 
@@ -322,24 +326,24 @@ class Game:
         joypad_fire_right = False
         joypad_fire_up    = False
         joypad_super_fire = False
-        if self.joypad is not None:
+        if joypad is not None:
             try:
-                _btn = self.joypad.read_buttons()
+                _btn = joypad.read_buttons()
                 joypad_active = True
                 # Movement: 4 px per frame, clamped below
-                if _btn['L']: self.ship.x -= 4
-                if _btn['R']: self.ship.x += 4
-                if _btn['U']: self.ship.y -= 4
-                if _btn['D']: self.ship.y += 4
+                if _btn['L']: ship.x -= 4
+                if _btn['R']: ship.x += 4
+                if _btn['U']: ship.y -= 4
+                if _btn['D']: ship.y += 4
                 
                 # Manual Aim Control (X/Y strictly)
                 _manual_aim_up_held = _btn['X'] or _btn['Y']
-                self.ship.aim_up = _manual_aim_up_held or danger  # danger always forces aim_up
+                ship.aim_up = _manual_aim_up_held or danger  # danger always forces aim_up
                 
                 # Fire Mapping
                 joypad_fire_right = _btn['A'] or _btn['+']
                 joypad_super_fire = _btn['B'] or _btn['-']
-                joypad_fire_up    = self.ship.aim_up and (joypad_fire_right or joypad_super_fire)
+                joypad_fire_up    = ship.aim_up and (joypad_fire_right or joypad_super_fire)
             except Exception:
                 # I2C hiccup — treat as no input this frame
                 joypad_active = False
@@ -348,21 +352,21 @@ class Game:
             # Ship aims up if village is in trouble or in danger
             # Boss fights normally override upward aiming UNLESS it's a critical danger
             if self.boss_active:
-                self.ship.aim_up = danger
+                ship.aim_up = danger
             else:
-                self.ship.aim_up = trouble or danger
+                ship.aim_up = trouble or danger
 
-        self.ship.boss_mode = self.boss_active
-        self.ship.nuke_ready = danger
-        self.ship.update(self.t)
+        ship.boss_mode = self.boss_active
+        ship.nuke_ready = danger
+        ship.update(t)
         # Visual ship position (for collisions, firing origin AND halo)
-        self.ship_vx = self.ship.x + self.ship.ox
-        self.ship_vy = self.ship.y + self.ship.oy
+        self.ship_vx = ship.x + ship.ox
+        self.ship_vy = ship.y + ship.oy
         ship_x, ship_y = self.ship_vx, self.ship_vy
 
         # ESCAPE/EVASION LOGIC: Pre-calculate counts/threats
         alien_count = 0
-        for a in ALIEN_POOL._pool:
+        for a in alien_pool:
             if a.active: alien_count += 1
         is_horde = alien_count > 10
         near_a = self.get_nearest_alien(ship_x, ship_y)
@@ -441,7 +445,7 @@ class Game:
         # Boss fight end check
         if self.boss_active:
             boss_alive = False
-            for a in ALIEN_POOL._pool:
+            for a in alien_pool:
                 if a.active and a.is_boss:
                     boss_alive = True
                     break
@@ -639,7 +643,7 @@ class Game:
                     _rain_live[i] = False
 
         # ---- Enemy laser update + ship collision ----
-        for el in ENEMY_LASER_POOL.active_objects():
+        for el in enemy_laser_pool:
             if not el.active:
                 continue
             el.update()
@@ -657,7 +661,7 @@ class Game:
                     self.pause_timer = 150
 
         # ---- Laser update + collision ----
-        for l in LASER_POOL.active_objects():
+        for l in laser_pool:
             if not l.active:
                 continue
             l.update()
@@ -667,7 +671,7 @@ class Game:
 
             # Cloud/Celestial check (if firing up)
             if l.is_up:
-                res = self.env.check_cloud_damage(lx, ly, self.t)
+                res = env.check_cloud_damage(lx, ly, t)
                 if res:
                     self.score += 10 # Score for hitting/destroying cloud
                     self.explode_timer = 2
@@ -678,21 +682,21 @@ class Game:
                     l.active = False
                     continue
                 # NUKE CHECK: Shoot the sun/moon to wipe the screen
-                if (self.score < 40 or len(self.env.houses) < 6) and not self.nuke_used:
-                    if self.env.check_celestial_damage(lx, ly, self.t):
+                if (self.score < 40 or len(env.houses) < 6) and not self.nuke_used:
+                    if env.check_celestial_damage(lx, ly, t):
                         self.score += 100 # Huge bonus for nuclear trigger
                         print("Nuclear")
                         self.nuke_used = True
                         self.nuke_anim_timer = 60
                         # Clear everything
-                        for a in ALIEN_POOL.active_objects(): a.active = False
-                        for el in ENEMY_LASER_POOL.active_objects(): el.active = False
-                        self.env.clouds = []
-                        self.env.cloud_pens = []
+                        for a in alien_pool: a.active = False
+                        for el in enemy_laser_pool: el.active = False
+                        env.clouds = []
+                        env.cloud_pens = []
                         l.active = False
                         continue
             
-            for a in ALIEN_POOL.active_objects():
+            for a in alien_pool:
                 if not a.active:
                     continue
                 dx = lx - a.x; dy = ly - a.y
@@ -708,7 +712,7 @@ class Game:
                     break
 
         # ---- Alien update + ship collision ----
-        for a in ALIEN_POOL.active_objects():
+        for a in alien_pool:
             if not a.active:
                 continue
             a.update()
@@ -727,7 +731,7 @@ class Game:
                     self.pause_timer = 150
 
         # ---- Particle update ----
-        for p in PARTICLE_POOL.active_objects():
+        for p in PARTICLE_POOL._pool:
             if p.active:
                 p.update()
 
@@ -783,11 +787,13 @@ class Game:
                 p.set_led_rgb(i, 0, 0, 0)
 
     # -----------------------------------------------------------------------
+    @micropython.native
     def draw(self):
-        d = self.display
+        d = self.display; env = self.env; ship = self.ship; t = self.t
+        ship_vx, ship_vy = self.ship_vx, self.ship_vy
 
         # Layer 0 (Background)
-        self.env.draw_layer0(self.t)
+        env.draw_layer0(t)
 
         # Layer 1 (Entities)
         d.set_layer(1)
@@ -795,12 +801,12 @@ class Game:
         d.clear()
 
         # Night-time: spotlight + dimming (tracks visual ship position)
-        if self.env.is_night:
+        if env.is_night:
             fast_dimmer(d, self.pen_night_dim)
             d.set_pen(self.pen_halo)
-            d.circle(int(self.ship_vx), int(self.ship_vy), 42)
+            d.circle(int(ship_vx), int(ship_vy), 42)
             d.set_pen(self.pen_black)
-            d.circle(int(self.ship_vx), int(self.ship_vy), 40)
+            d.circle(int(ship_vx), int(ship_vy), 40)
 
         # Rain
         d.set_pen(self.pen_rain)
@@ -810,29 +816,29 @@ class Game:
                 d.line(_rain_x[i], ry, _rain_x[i], ry + _rain_spd[i])
 
         # Lasers
-        for l in LASER_POOL.active_objects():
+        for l in LASER_POOL._pool:
             if l.active:
                 l.draw(d, self.pen_up_laser if l.is_up else self.pen_laser)
 
         # Enemy lasers
-        for el in ENEMY_LASER_POOL.active_objects():
+        for el in ENEMY_LASER_POOL._pool:
             if el.active:
                 el.draw(d, self.pen_enemy_laser)
 
         # Particles
-        for p in PARTICLE_POOL.active_objects():
+        for p in PARTICLE_POOL._pool:
             if p.active:
                 p.draw(d, self.pen_particle, self.pen_water)
 
         # Aliens (boss aliens drawn in red)
-        for a in ALIEN_POOL.active_objects():
+        for a in ALIEN_POOL._pool:
             if a.active:
                 if a.is_boss:
                     a.draw(d, self.pen_boss_alien_body, self.pen_boss_alien_glow)
                 else:
                     a.draw(d, self.pen_alien_body,      self.pen_alien_glow)
 
-        self.ship.draw(self.env.is_night, self.t)
+        ship.draw(env.is_night, t)
 
         # HUD - Only regenerate strings when score changes
         if self.score != self._last_score_drawn:
