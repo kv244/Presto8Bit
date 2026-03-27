@@ -20,6 +20,7 @@ print("-> Loading utils...")
 gc.collect()
 print(f"   [RAM] {gc.mem_free()} bytes free.")
 from utils import fast_dimmer
+import achievements as _ach
 print("   [OK] Utils loaded.")
 print("-> Loading entities...")
 gc.collect()
@@ -73,7 +74,9 @@ class Game:
                  'pen_boss_hud', 'pen_boss_shadow', 'pen_boss_alien_body',
                  'pen_boss_alien_glow', 'pen_enemy_laser', 'pen_night_dim', 'high_score',
                  '_gc_countdown', '_cloud_eraser_offsets',
-                 '_score_str', '_hi_str', '_last_score_drawn', '_last_hi_drawn', 'in_intro')
+                 '_score_str', '_hi_str', '_last_score_drawn', '_last_hi_drawn', 'in_intro',
+                 'achievements', 'ach_notify_timer', 'ach_notify_text', 'pen_ach',
+                 '_aliens_killed', '_clouds_destroyed', '_untouchable')
 
     def __init__(self, presto=None):
         # 1. Hardware & Engine Setup (persistent)
@@ -129,6 +132,12 @@ class Game:
         except:
             self.high_score = 0
 
+        # Achievements (persistent across resets)
+        self.achievements = _ach.load()
+        self.ach_notify_timer = 0
+        self.ach_notify_text = ''
+        self.pen_ach = d.create_pen(255, 215, 0)  # gold notification text
+
         self._cloud_eraser_offsets = [-45, -30, -15, 0, 15, 30, 45]
         
         # Cache HUD strings to avoid per-frame heap churn
@@ -177,6 +186,20 @@ class Game:
         self.nuke_anim_timer = 0
         self.cloud_revert_timer = 0
         self._gc_countdown = 0
+        # Per-game achievement counters (achievements themselves persist)
+        self._aliens_killed = 0
+        self._clouds_destroyed = 0
+        self._untouchable = True
+        self.ach_notify_timer = 0
+
+    # -----------------------------------------------------------------------
+    def _unlock_ach(self, key):
+        name = _ach.unlock(key, self.achievements)
+        if name is not None:
+            # Only show notification if none is currently displayed
+            if self.ach_notify_timer == 0:
+                self.ach_notify_text = f'ACHIEVEMENT: {name}!'
+                self.ach_notify_timer = 150  # ~3 seconds at 50fps
 
     # -----------------------------------------------------------------------
     # Spawn helpers — use pools, never append()
@@ -280,6 +303,8 @@ class Game:
                 self.pause_timer = 250
                 self.score += 100  # Bonus for survival!
                 self.last_hour_checked = now[3]
+                if self.env.is_night:
+                    self._unlock_ach('night_owl')
                 if self.score > self.high_score:
                     self.high_score = self.score
                     with open("highscore.txt", "w") as f:
@@ -454,6 +479,7 @@ class Game:
                 self.score += 50                       # bonus for clearing the swarm
                 self.boss_next_threshold = self.score + 1000 # Next boss much further away
                 self.boss_defeat_timer = 180           # show "BOSS DEFEATED!" for ~3s
+                self._unlock_ach('boss_slayer')
                 gc.collect()                           # reclaim memory from the boss swarm
 
         # Boss defeat message countdown
@@ -679,6 +705,9 @@ class Game:
                     if res == 2:
                         # CLOUD DESTROYED: trigger recovery window
                         self.cloud_revert_timer = 100
+                        self._clouds_destroyed += 1
+                        if self._clouds_destroyed >= 10:
+                            self._unlock_ach('cloud_buster')
                     l.active = False
                     continue
                 # NUKE CHECK: Shoot the sun/moon to wipe the screen
@@ -688,6 +717,7 @@ class Game:
                         print("Nuclear")
                         self.nuke_used = True
                         self.nuke_anim_timer = 60
+                        self._unlock_ach('nuke_em')
                         # Clear everything
                         for a in alien_pool: a.active = False
                         for el in enemy_laser_pool: el.active = False
@@ -708,6 +738,9 @@ class Game:
                     if a.hp <= 0:
                         self.score += 20 if a.is_boss else 10 # More points for elites/bosses
                         a.active = False
+                        self._aliens_killed += 1
+                        if self._aliens_killed == 1:
+                            self._unlock_ach('first_blood')
                     l.active = False
                     break
 
@@ -722,6 +755,7 @@ class Game:
             if dx*dx + dy*dy < 100:
                 penalty = 150 if self.boss_active else 50
                 self.score -= penalty
+                self._untouchable = False
                 self.impact_timer = 15
                 self.spawn_particles(ship_x, ship_y, 20)
                 a.active = False
@@ -745,22 +779,62 @@ class Game:
             else:
                 self._gc_countdown = 300  # plenty of memory, check again in 300 frames
 
+        # ---- Achievement score milestones (cheap set-lookup guards) ----
+        s = self.score
+        if s >= 500 and self._untouchable:
+            self._unlock_ach('untouchable')
+        if s >= 1000:
+            self._unlock_ach('centurion')
+            if len(self.env.houses) == 12:
+                self._unlock_ach('village_guardian')
+        if s >= 2000:
+            self._unlock_ach('legendary')
+
+        # ---- Achievement notification countdown ----
+        if self.ach_notify_timer > 0:
+            self.ach_notify_timer -= 1
+
     # -----------------------------------------------------------------------
     def _update_leds(self):
-        """Drive the 7 ambient LEDs to reflect game state."""
+        """Drive the 7 ambient LEDs to reflect game state (priority order)."""
         p = self.presto
         t = self.t
 
         if self.game_over and self.pause_timer > 0:
-            # SHIP DESTROYED: hard red flash alternating with off
+            # 1. SHIP DESTROYED: hard red flash alternating with off
             on = (t // 4) % 2 == 0
             v = 255 if on else 0
             for i in range(7):
                 p.set_led_rgb(i, v, 0, 0)
 
+        elif self.nuke_anim_timer > 0:
+            # 2. NUKE FIRED: white flash with slow fade (timer: 60→0)
+            bri = min(255, self.nuke_anim_timer * 2)
+            for i in range(7):
+                p.set_led_rgb(i, bri, bri, bri)
+
+        elif self.impact_timer > 0:
+            # 3. SHIP HIT: orange flash with smoother fade (timer: 15→0)
+            bri = min(255, self.impact_timer * 10)
+            for i in range(7):
+                p.set_led_rgb(i, bri, bri // 3, 0)
+
+        elif self.boss_active:
+            # 4. BOSS FIGHT: red wave + per-LED sine flicker
+            for i in range(7):
+                wave = max(0, 180 - ((t + i * 8) % 40) * 5)
+                flicker = int(abs(math.sin((t + i * 31) * 0.18)) * 60)
+                bri = min(255, wave + flicker)
+                p.set_led_rgb(i, bri, 0, 0)
+
+        elif self.explode_timer > 0:
+            # 5. EXPLOSION: brief orange burst
+            bri = min(255, self.explode_timer * 40)
+            for i in range(7):
+                p.set_led_rgb(i, bri, bri // 4, 0)
+
         elif self.pause_timer > 0:
-            # HOURLY VICTORY: warm gold pulse (full brightness, fading)
-            # pause_timer counts down from 250; use it to drive brightness
+            # 6. HOURLY VICTORY: warm gold pulse
             brightness = min(255, self.pause_timer)
             flash = (t // 6) % 2 == 0
             r = brightness if flash else brightness // 3
@@ -769,22 +843,32 @@ class Game:
                 p.set_led_rgb(i, r, g, 0)
 
         elif self.env.is_night:
-            # NIGHT STARFIELD: each LED twinkles independently
-            # Uses a simple deterministic formula — no allocations
+            # 7. NIGHT STARFIELD: each LED twinkles independently
             for i in range(7):
-                # Each LED has a different phase offset so they don't all sync
                 phase = (t + i * 17) % 31
                 if phase < 4:
-                    # Brief bright white twinkle
                     bri = (4 - phase) * 60
                     p.set_led_rgb(i, bri, bri, bri)
                 else:
                     p.set_led_rgb(i, 0, 0, 0)
 
         else:
-            # Daytime / boss fight — LEDs off
+            # 8. DAYTIME: score-based ambient glow (green=safe → red=danger)
+            s = self.score
+            if s >= 300:
+                r, g, b = 0, 50, 20       # safe: subtle green
+            elif s <= 100:
+                r, g, b = 50, 0, 0        # danger: red warning
+            else:
+                frac = (s - 100) / 200    # 0.0=danger, 1.0=safe
+                r = int(50 * (1.0 - frac))
+                g = int(50 * frac)
+                b = int(10 * frac)
+            # Slow gentle pulse (no allocations)
+            pulse = t % 60
+            mul = 1 + (pulse if pulse < 30 else 60 - pulse) // 15  # 1..3
             for i in range(7):
-                p.set_led_rgb(i, 0, 0, 0)
+                p.set_led_rgb(i, min(255, r * mul), min(255, g * mul), min(255, b * mul))
 
     # -----------------------------------------------------------------------
     @micropython.native
@@ -925,6 +1009,20 @@ class Game:
             d.set_pen(self.pen_boss_hud)
             if (self.t // 15) % 2 == 0:
                 d.text("TOUCH SCREEN OR PRESS BUTTON TO START", 15, 227, 300, 1)
+
+        # Achievement: persistent count (bottom-right HUD)
+        ach_str = f'{len(self.achievements)}/{_ach.TOTAL}'
+        d.set_pen(self.pen_shadow)
+        d.text(ach_str, 297, 232, 320, 1)
+        d.set_pen(self.pen_ach)
+        d.text(ach_str, 295, 230, 320, 1)
+
+        # Achievement: unlock notification banner (3-second fade)
+        if self.ach_notify_timer > 0:
+            d.set_pen(self.pen_shadow)
+            d.text(self.ach_notify_text, 12, 222, 310, 1)
+            d.set_pen(self.pen_ach)
+            d.text(self.ach_notify_text, 10, 220, 310, 1)
 
         self._update_leds()
         self.presto.update()
