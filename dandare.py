@@ -21,6 +21,7 @@ gc.collect()
 print(f"   [RAM] {gc.mem_free()} bytes free.")
 from utils import fast_dimmer
 import achievements as _ach
+import music as _music
 print("   [OK] Utils loaded.")
 print("-> Loading entities...")
 gc.collect()
@@ -76,7 +77,8 @@ class Game:
                  '_gc_countdown', '_cloud_eraser_offsets',
                  '_score_str', '_hi_str', '_last_score_drawn', '_last_hi_drawn', 'in_intro',
                  'achievements', 'ach_notify_timer', 'ach_notify_text', 'pen_ach',
-                 '_aliens_killed', '_clouds_destroyed', '_untouchable')
+                 '_aliens_killed', '_clouds_destroyed', '_untouchable',
+                 '_music')
 
     def __init__(self, presto=None):
         # 1. Hardware & Engine Setup (persistent)
@@ -91,6 +93,7 @@ class Game:
             
         self.display = self.presto.display
         self.buzzer  = Buzzer(Pin(43))
+        self._music  = _music.Player(self.buzzer)
 
         # Optional QWIIC joypad (QwSTPad) — graceful fallback to autopilot
         try:
@@ -148,8 +151,11 @@ class Game:
         
         self.in_intro = True
         self.reset()
+        self._music.play(_music.INTRO, loop=True)
 
     def reset(self):
+        if hasattr(self, '_music'):
+            self._music.stop()
         # Free old subsystem memory before allocating new ones
         gc.collect()
         # 2. Subsystems
@@ -315,16 +321,18 @@ class Game:
             presto.touch.poll()
             if presto.touch.state:
                 self.in_intro = False
+                self._music.stop()
                 return
-            
+
             # Check for joypad dismissal
             if joypad:
                 try:
                     _btn = joypad.read_buttons()
                     # If any button is pressed, exit intro
                     for b in _btn.values():
-                        if b: 
+                        if b:
                             self.in_intro = False
+                            self._music.stop()
                             return
                 except: pass
             return
@@ -685,6 +693,7 @@ class Game:
                 if self.score <= 0:
                     self.game_over = True
                     self.pause_timer = 150
+                    self._music.play(_music.GAME_OVER)
 
         # ---- Laser update + collision ----
         for l in laser_pool:
@@ -763,6 +772,7 @@ class Game:
                     self.score = 0
                     self.game_over = True
                     self.pause_timer = 150
+                    self._music.play(_music.GAME_OVER)
 
         # ---- Particle update ----
         for p in PARTICLE_POOL._pool:
@@ -1032,6 +1042,7 @@ class Game:
         while True:
             self.update()
             self.draw()
+            self._music.advance()
             if self.pause_timer > 0:
                 self.pause_timer -= 1
                 if self.pause_timer == 0 and self.game_over:
