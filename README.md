@@ -4,6 +4,10 @@
 
 A high-performance, object-oriented 2D space shooter engine for the **Pimoroni Presto (RP2350)**. This project demonstrates advanced MicroPython techniques including Inline Assembly, Viper emitters, and a dual-layer hardware-composed rendering system.
 
+| Daytime gameplay | Sunset transition with night dimmer |
+|:---:|:---:|
+| ![Daytime gameplay showing ship, aliens, clouds and parallax cityscape](i1.jpg) | ![Sunset phase with scanline dimmer effect and city silhouette](i2.jpg) |
+
 ## 🌟 Game Features & Mechanics
 
 *   **Dynamic Threat Scaling:** The game starts with a baseline difficulty, but passing 300 points triggers a progressive spawn rate scaler. Surviving past 900 points unleashes an absolute bullet hell (~30% chance for an alien ship every frame).
