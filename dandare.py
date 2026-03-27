@@ -219,9 +219,12 @@ class Game:
         sy = random.randint(40, 160)
         tx = -50 if random.random() > 0.3 else 370
         is_seeker = self.ship if random.random() > 0.85 else None
-        
+
         # Elite alien chance: 15% chance to have 2HP (drawn in red like a mini-boss)
         is_elite = random.random() > 0.85
+        # 50% of elites that aren't already seekers become seekers — they hunt the ship
+        if is_elite and is_seeker is None and random.random() > 0.5:
+            is_seeker = self.ship
         a.reset(
             340, sy,
             random.randint(0, 320), random.randint(0, 240),
@@ -246,13 +249,17 @@ class Game:
             angle = (2 * math.pi * i) / count
             sx = int(cx + math.cos(angle) * radius)
             sy = int(cy + math.sin(angle) * radius)
+            # Store ring offset in p1x/p1y — Alien.update() uses these to maintain
+            # angular formation during contraction (see ring_scale logic there).
             a.reset(
-                sx, sy, 0, 0, 0, 0,
-                speed=1,          
+                sx, sy,
+                float(sx - cx), float(sy - cy),  # p1x, p1y = ring offset
+                0, 0,
+                speed=1,
                 target=self.ship,
                 is_boss=True,
-                move_speed=3.8,    
-                hp=4               
+                move_speed=3.8,
+                hp=4
             )
 
     def fire_laser(self, x, y, vx=12, vy=0, is_up=False):
@@ -313,7 +320,11 @@ class Game:
                 joypad_active = False
 
         if not joypad_active:
-            ship.aim_up = danger if self.boss_active else (trouble or danger)
+            if self.boss_active:
+                # During boss fight keep firing horizontally — only rotate up for nuke opportunity
+                ship.aim_up = self.score < 40 and not self.nuke_used
+            else:
+                ship.aim_up = trouble or danger
 
         ship.boss_mode  = self.boss_active
         ship.nuke_ready = danger
@@ -341,7 +352,7 @@ class Game:
             if near_a and (self.boss_active or is_horde):
                 adx = ship_x - near_a.x; ady = ship_y - near_a.y
                 dist_sq = adx*adx + ady*ady
-                if dist_sq < 4225:  # 65px danger radius
+                if dist_sq < 4225:  # 65px danger radius — evasion
                     dist = math.sqrt(dist_sq)
                     if dist > 0:
                         vx = (adx / dist) * 6; vy = (ady / dist) * 5
@@ -353,9 +364,15 @@ class Game:
                 else:
                     if abs(ship.x - home_x) > 2:
                         ship.x += 2 if ship.x < home_x else -2
+                    # Drift y toward nearest alien (1px/frame) for better firing angle
+                    if abs(ship.y - near_a.y) > 5:
+                        ship.y += 1 if ship.y < near_a.y else -1
             else:
                 if abs(ship.x - home_x) > 2:
                     ship.x += 2 if ship.x < home_x else -2
+                # Drift y toward nearest alien (1px/frame) for better firing angle
+                if near_a and abs(ship.y - near_a.y) > 5:
+                    ship.y += 1 if ship.y < near_a.y else -1
         ship.x = max(20, min(300, ship.x))
         ship.y = max(40, min(200, ship.y))
 
@@ -447,7 +464,15 @@ class Game:
                         self.fire_laser(sx, sy - 10, vx=vx, vy=-12, is_up=True)
                 else:
                     dv = (random.random() - 0.5) * miss_factor
-                    self.fire_laser(sx + 10, sy,      vx=14, vy=dv)
+                    # Centre laser tracks nearest alien with angular ballistics;
+                    # the surrounding 6 keep the wide spread for area coverage.
+                    cvx, cvy = 14.0, dv
+                    if target_a:
+                        tdx = target_a.x - ship_x; tdy = target_a.y - ship_y
+                        ca = math.atan2(tdy, tdx)
+                        ca = max(-1.0472, min(1.0472, ca))  # clamp to ±60°
+                        cvx = 14.0 * math.cos(ca); cvy = 14.0 * math.sin(ca)
+                    self.fire_laser(sx + 10, sy,      vx=cvx, vy=cvy)
                     self.fire_laser(sx + 5,  sy - 12, vx=13, vy=dv-1)
                     self.fire_laser(sx + 5,  sy + 12, vx=13, vy=dv+1)
                     self.fire_laser(sx,      sy - 24, vx=12, vy=dv-2)

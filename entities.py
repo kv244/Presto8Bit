@@ -68,10 +68,15 @@ class Alien:
             if t > 400:
                 self.active = False
             else:
-                # Cache everything in locals to avoid slow self-lookups
                 ax, ay = self.x, self.y
-                # Explicitly accessing ship attributes (targets are always ships)
                 tx, ty = target.x + target.ox, target.y + target.oy
+                if self.is_boss:
+                    # Ring formation: p1x/p1y hold the spawn offset from ring centre.
+                    # Scale decays 1.0→0 over 160 frames, keeping angular separation
+                    # while the ring contracts onto the ship.
+                    ring_scale = max(0.0, (160.0 - t) / 160.0)
+                    tx += self.p1x * ring_scale
+                    ty += self.p1y * ring_scale
                 dx, dy = tx - ax, ty - ay
                 dist = math.sqrt(dx*dx + dy*dy)
                 if dist > 0:
