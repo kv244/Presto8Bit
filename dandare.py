@@ -292,13 +292,321 @@ class Game:
 
     # -----------------------------------------------------------------------
     @micropython.native
+    def _handle_input(self, t, danger, trouble):
+        """Read joypad, set ship aim/mode flags, run ship.update().
+        Returns (joypad_active, jp_fire_right, jp_super_fire)."""
+        ship = self.ship; joypad = self.joypad
+        joypad_active = False; jp_fire = False; jp_super = False
+
+        if joypad is not None:
+            try:
+                _btn = joypad.read_buttons()
+                joypad_active = True
+                if _btn['L']: ship.x -= 4
+                if _btn['R']: ship.x += 4
+                if _btn['U']: ship.y -= 4
+                if _btn['D']: ship.y += 4
+                ship.aim_up = _btn['X'] or _btn['Y'] or danger
+                jp_fire  = _btn['A'] or _btn['+']
+                jp_super = _btn['B'] or _btn['-']
+            except Exception:
+                joypad_active = False
+
+        if not joypad_active:
+            ship.aim_up = danger if self.boss_active else (trouble or danger)
+
+        ship.boss_mode  = self.boss_active
+        ship.nuke_ready = danger
+        ship.update(t)
+        self.ship_vx = ship.x + ship.ox
+        self.ship_vy = ship.y + ship.oy
+        return joypad_active, jp_fire, jp_super
+
+    # -----------------------------------------------------------------------
+    def _update_autopilot(self, joypad_active, danger, trouble, is_horde, ship_x, ship_y, near_a):
+        """Autonomous ship movement when no joypad is active."""
+        if joypad_active:
+            return
+        ship = self.ship
+        if ship.aim_up:
+            tx = ship.x
+            if danger:
+                tx, _ = self.env.get_celestial_coords(self.t)
+            elif trouble:
+                tx = self.env.get_nearest_cloud_x(ship.x, self.t)
+            if tx is not None and abs(ship.x - tx) > 3:
+                ship.x += 4 if ship.x < tx else -4
+        else:
+            home_x = 160 if self.boss_active or is_horde else 45
+            if near_a and (self.boss_active or is_horde):
+                adx = ship_x - near_a.x; ady = ship_y - near_a.y
+                dist_sq = adx*adx + ady*ady
+                if dist_sq < 4225:  # 65px danger radius
+                    dist = math.sqrt(dist_sq)
+                    if dist > 0:
+                        vx = (adx / dist) * 6; vy = (ady / dist) * 5
+                        if (ship.x <= 20 or ship.x >= 300) and abs(vx) > 1:
+                            ship.y += 5 if ady > 0 else -5
+                        if (ship.y <= 40 or ship.y >= 200) and abs(vy) > 1:
+                            ship.x += 6 if adx > 0 else -6
+                        ship.x += vx; ship.y += vy
+                else:
+                    if abs(ship.x - home_x) > 2:
+                        ship.x += 2 if ship.x < home_x else -2
+            else:
+                if abs(ship.x - home_x) > 2:
+                    ship.x += 2 if ship.x < home_x else -2
+        ship.x = max(20, min(300, ship.x))
+        ship.y = max(40, min(200, ship.y))
+
+    # -----------------------------------------------------------------------
+    def _handle_spawning(self, alien_pool):
+        """Alien/rain spawning and boss fight lifecycle."""
+        if not self.boss_active:
+            threshold = max(0.70, 0.94 - ((self.score - 300) * 0.0004)) if self.score > 300 else 0.94
+            if random.random() > threshold:
+                self.spawn_alien()
+
+        cloud_count = self.env.get_all_cloud_x(self.t)
+        if random.random() < cloud_count * 0.16:
+            _rain_spawn(cloud_count, self.env._cloud_x_buf)
+
+        if not self.boss_active and self.score >= self.boss_next_threshold and self.boss_defeat_timer == 0:
+            self.boss_active = True
+            self.spawn_boss_swarm()
+
+        if self.boss_active:
+            if not any(a.active and a.is_boss for a in alien_pool):
+                self.boss_active = False
+                self.score += 50
+                self.boss_next_threshold = self.score + 1000
+                self.boss_defeat_timer = 180
+                self._unlock_ach('boss_slayer')
+                gc.collect()
+
+        if self.boss_defeat_timer > 0:
+            self.boss_defeat_timer -= 1
+
+    # -----------------------------------------------------------------------
+    def _set_ambient_tone(self):
+        """Buzzer tone when not firing, driven by active event timers."""
+        b = self.buzzer
+        if   self.nuke_anim_timer > 0: b.set_tone(random.randint(50, 150))
+        elif self.impact_timer > 0:    b.set_tone(random.randint(50, 250))
+        elif self.explode_timer > 0:   b.set_tone(random.randint(2000, 3000))
+        else:                          b.set_tone(0)
+
+    @micropython.native
+    def _handle_firing(self, ship_x, ship_y, alien_count, is_horde,
+                        joypad_active, jp_fire, jp_super, danger):
+        """Player firing (hero + standard modes) and alien return fire."""
+        ship = self.ship; env = self.env; buzzer = self.buzzer
+
+        # Night halo intrusion — auto-fire trigger
+        triggered_by_halo = False
+        if env.is_night:
+            for a in ALIEN_POOL.active_objects():
+                if a.active:
+                    adx = a.x - ship_x; ady = a.y - ship_y
+                    if adx*adx + ady*ady < 1764:
+                        triggered_by_halo = True; break
+
+        house_count       = len(env.houses)
+        is_danger         = self.score <= 50
+        fire_rate_penalty = (12 - house_count) * 0.015
+        miss_factor       = (12 - house_count) * 0.35
+
+        if self.boss_active or is_horde or (joypad_active and jp_super):
+            # ---- HERO MODE ----
+            fire_threshold = max(0.20, 0.60 - alien_count * 0.02 + fire_rate_penalty)
+            if ship.aim_up: fire_threshold = 0.15
+            target_a = self.get_nearest_alien(ship_x, ship_y)
+            if joypad_active:
+                firing_up   = ship.aim_up and (jp_fire or jp_super) and ship.fire_cooldown == 0
+                firing_side = not ship.aim_up and (jp_fire or jp_super) and ship.fire_cooldown == 0
+                should_fire = firing_up or firing_side
+            else:
+                should_fire = (random.random() > fire_threshold or triggered_by_halo or (target_a and not ship.aim_up)) and ship.fire_cooldown == 0
+                firing_up   = should_fire and ship.aim_up
+                firing_side = should_fire and not ship.aim_up
+            if (ship.aim_up or alien_count > 0) and should_fire:
+                sx, sy = ship_x, ship_y
+                if firing_up:
+                    cx, cy = env.get_celestial_coords(self.t)
+                    for offset in self._cloud_eraser_offsets:
+                        self.fire_laser(sx + offset, sy - 10, vx=0, vy=-12, is_up=True)
+                    if danger:
+                        vx = float(cx - sx) * -12.0 / (cy - sy) if cy != sy else 0
+                        self.fire_laser(sx, sy - 10, vx=vx, vy=-12, is_up=True)
+                else:
+                    dv = (random.random() - 0.5) * miss_factor
+                    self.fire_laser(sx + 10, sy,      vx=14, vy=dv)
+                    self.fire_laser(sx + 5,  sy - 12, vx=13, vy=dv-1)
+                    self.fire_laser(sx + 5,  sy + 12, vx=13, vy=dv+1)
+                    self.fire_laser(sx,      sy - 24, vx=12, vy=dv-2)
+                    self.fire_laser(sx,      sy + 24, vx=12, vy=dv+2)
+                    self.fire_laser(sx - 5,  sy - 36, vx=11, vy=dv-3)
+                    self.fire_laser(sx - 5,  sy + 36, vx=11, vy=dv+3)
+                ship.recoil = 5
+                ship.fire_cooldown = 2 if not firing_up else 3
+                buzzer.set_tone(1800)
+            else:
+                self._set_ambient_tone()
+        else:
+            # ---- STANDARD MODE ----
+            base_threshold = 0.75 if is_danger else 0.90
+            fire_threshold = max(0.50, base_threshold - alien_count * 0.02 + fire_rate_penalty)
+            if ship.aim_up: fire_threshold = 0.40
+            target_a = self.get_nearest_alien(ship_x, ship_y)
+            if joypad_active:
+                firing_up   = ship.aim_up and jp_fire and ship.fire_cooldown == 0
+                firing_side = not ship.aim_up and jp_fire and ship.fire_cooldown == 0
+                should_fire = firing_up or firing_side
+            else:
+                should_fire = (random.random() > fire_threshold or triggered_by_halo or (target_a and not ship.aim_up)) and ship.fire_cooldown == 0
+                firing_up   = should_fire and ship.aim_up
+                firing_side = should_fire and not ship.aim_up
+            if (ship.aim_up or alien_count > 0) and should_fire:
+                ship.fire_cooldown = 4
+                dv = (random.random() - 0.5) * miss_factor
+                if firing_up:
+                    sx, sy = ship_x, ship_y
+                    self.fire_laser(sx,      sy - 10, vx=0, vy=-12, is_up=True)
+                    self.fire_laser(sx - 15, sy - 5,  vx=0, vy=-12, is_up=True)
+                    self.fire_laser(sx + 15, sy - 5,  vx=0, vy=-12, is_up=True)
+                    if danger:
+                        cx, cy = env.get_celestial_coords(self.t)
+                        vx = float(cx - sx) * -12.0 / (cy - sy) if cy != sy else 0
+                        self.fire_laser(sx, sy - 10, vx=vx, vy=-12, is_up=True)
+                else:
+                    vx, vy = 12, dv
+                    if target_a:
+                        dx = target_a.x - ship_x; dy = target_a.y - ship_y
+                        angle = math.atan2(dy, dx)
+                        limit = 60 * math.pi / 180
+                        angle = max(-limit, min(limit, angle))
+                        vx = 12 * math.cos(angle); vy = 12 * math.sin(angle)
+                    self.fire_laser(ship_x + 10, ship_y, vx=vx, vy=vy)
+                    if is_danger:
+                        self.fire_laser(ship_x, ship_y - 15, vx=vx, vy=vy)
+                        self.fire_laser(ship_x, ship_y + 15, vx=vx, vy=vy)
+                ship.recoil = 5
+                buzzer.set_tone(1500 if is_danger else 1200)
+            else:
+                self._set_ambient_tone()
+
+        # Alien return fire
+        for a in ALIEN_POOL.active_objects():
+            if a.active:
+                prob = 0.12 if a.is_boss else 0.005
+                if a.target:
+                    dx = a.x - ship_x; dy = a.y - ship_y
+                    prob *= 3.0 if dx*dx + dy*dy < 22500 else 1.5
+                if random.random() < prob:
+                    el = ENEMY_LASER_POOL.get()
+                    if el is not None:
+                        el.reset(int(a.x) - 8, int(a.y))
+
+    # -----------------------------------------------------------------------
+    @micropython.native
+    def _update_collisions(self, ship_x, ship_y, alien_pool, laser_pool, enemy_laser_pool, env, t):
+        """Rain, enemy laser, player laser, and alien collision resolution."""
+        # ---- Rain ----
+        for i in range(_RAIN_MAX):
+            if _rain_live[i]:
+                _rain_y[i] += _rain_spd[i]
+                dx = _rain_x[i] - ship_x; dy = _rain_y[i] - ship_y
+                if dx*dx + dy*dy < 144:
+                    self.score = max(0, self.score - 1)
+                    _rain_live[i] = False
+                    self.spawn_particles(_rain_x[i], _rain_y[i], 2, is_water=True)
+                    continue
+                if env.check_house_damage(_rain_x[i], _rain_y[i], t):
+                    _rain_live[i] = False
+                    self.spawn_particles(_rain_x[i], _rain_y[i], 4, is_water=True)
+                    continue
+                if _rain_y[i] > 240:
+                    self.spawn_particles(_rain_x[i], 240, random.randint(2, 4), is_water=True)
+                    _rain_live[i] = False
+
+        # ---- Enemy lasers ----
+        for el in enemy_laser_pool:
+            if not el.active: continue
+            el.update()
+            if not el.active: continue
+            dx = el.x - ship_x; dy = el.y - ship_y
+            if dx*dx + dy*dy < 225:
+                self.score = max(0, self.score - max(5, self.score // 10))
+                self.impact_timer = 10
+                self.spawn_particles(ship_x, ship_y, 6)
+                el.active = False
+                if self.score <= 0:
+                    self.game_over = True; self.pause_timer = 150
+                    self._music.play(_music.GAME_OVER)
+
+        # ---- Player lasers ----
+        for l in laser_pool:
+            if not l.active: continue
+            l.update()
+            if not l.active: continue
+            lx = l.x; ly = l.y
+            if l.is_up:
+                res = env.check_cloud_damage(lx, ly, t)
+                if res:
+                    self.score += 10; self.explode_timer = 2
+                    self.spawn_particles(lx, ly, 4, is_water=True)
+                    if res == 2:
+                        self.cloud_revert_timer = 100
+                        self._clouds_destroyed += 1
+                        if self._clouds_destroyed >= 10:
+                            self._unlock_ach('cloud_buster')
+                    l.active = False; continue
+                if (self.score < 40 or len(env.houses) < 6) and not self.nuke_used:
+                    if env.check_celestial_damage(lx, ly, t):
+                        self.score += 100; self.nuke_used = True; self.nuke_anim_timer = 60
+                        self._unlock_ach('nuke_em')
+                        for a in alien_pool: a.active = False
+                        for el in enemy_laser_pool: el.active = False
+                        env.clouds = []; env.cloud_pens = []
+                        l.active = False; continue
+            for a in alien_pool:
+                if not a.active: continue
+                dx = lx - a.x; dy = ly - a.y
+                if dx*dx + dy*dy < 144:
+                    self.score += 10; self.explode_timer = 5
+                    self.spawn_particles(a.x, a.y, 8)
+                    a.hp -= 1
+                    if a.hp <= 0:
+                        self.score += 20 if a.is_boss else 10
+                        a.active = False
+                        self._aliens_killed += 1
+                        if self._aliens_killed == 1:
+                            self._unlock_ach('first_blood')
+                    l.active = False; break
+
+        # ---- Alien movement + ship collision ----
+        for a in alien_pool:
+            if not a.active: continue
+            a.update()
+            if not a.active: continue
+            dx = ship_x - a.x; dy = ship_y - a.y
+            if dx*dx + dy*dy < 100:
+                self.score -= 150 if self.boss_active else 50
+                self._untouchable = False; self.impact_timer = 15
+                self.spawn_particles(ship_x, ship_y, 20)
+                a.active = False
+                if self.score <= 0:
+                    self.score = 0; self.game_over = True; self.pause_timer = 150
+                    self._music.play(_music.GAME_OVER)
+
+    # -----------------------------------------------------------------------
+    @micropython.native
     def update(self):
         self.t = self.t + 1
         t = self.t
-        # Localization to avoid slow 'self' attribute lookups in the main loop
-        ship = self.ship; env = self.env; display = self.display; joypad = self.joypad
-        presto = self.presto; buzzer = self.buzzer; alien_pool = ALIEN_POOL._pool
-        laser_pool = LASER_POOL._pool; enemy_laser_pool = ENEMY_LASER_POOL._pool
+        alien_pool       = ALIEN_POOL._pool
+        laser_pool       = LASER_POOL._pool
+        enemy_laser_pool = ENEMY_LASER_POOL._pool
 
         # Throttled RTC check — only call time.localtime() rarely
         self.time_check_counter = self.time_check_counter + 1
@@ -307,7 +615,7 @@ class Game:
             now = time.localtime()
             if now[3] != self.last_hour_checked and now[4] == 0:
                 self.pause_timer = 250
-                self.score += 100  # Bonus for survival!
+                self.score += 100
                 self.last_hour_checked = now[3]
                 if self.env.is_night:
                     self._unlock_ach('night_owl')
@@ -317,492 +625,68 @@ class Game:
                         f.write(str(self.score))
 
         if self.in_intro:
-            # Check for touch dismissal
+            presto = self.presto; joypad = self.joypad
             presto.touch.poll()
             if presto.touch.state:
-                self.in_intro = False
-                self._music.stop()
-                return
-
-            # Check for joypad dismissal
+                self.in_intro = False; self._music.stop(); return
             if joypad:
                 try:
-                    _btn = joypad.read_buttons()
-                    # If any button is pressed, exit intro
-                    for b in _btn.values():
-                        if b:
-                            self.in_intro = False
-                            self._music.stop()
-                            return
+                    for b in joypad.read_buttons().values():
+                        if b: self.in_intro = False; self._music.stop(); return
                 except: pass
             return
 
         if self.pause_timer > 0:
             return
 
-        # Decrement all global timers
+        # Decrement global timers
         if self.cloud_revert_timer > 0: self.cloud_revert_timer -= 1
-        if self.impact_timer > 0:        self.impact_timer -= 1
-        if self.explode_timer > 0:       self.explode_timer -= 1
-        if self.nuke_anim_timer > 0:      self.nuke_anim_timer -= 1
+        if self.impact_timer > 0:       self.impact_timer -= 1
+        if self.explode_timer > 0:      self.explode_timer -= 1
+        if self.nuke_anim_timer > 0:    self.nuke_anim_timer -= 1
 
-        # Environment & ship
-        self.env.update(self.t % (self.PHASE_LEN * 4), self.PHASE_LEN)
-        has_clouds = len(self.env.clouds) > 0
-        trouble = len(self.env.houses) < 6 and has_clouds and self.cloud_revert_timer == 0
-        # CRITICAL: village almost gone OR score low
-        is_critical = (self.score < 40 or len(self.env.houses) < 6)
-        danger = is_critical and not self.nuke_used
+        self.env.update(t % (self.PHASE_LEN * 4), self.PHASE_LEN)
+        trouble = len(self.env.houses) < 6 and len(self.env.clouds) > 0 and self.cloud_revert_timer == 0
+        danger  = (self.score < 40 or len(self.env.houses) < 6) and not self.nuke_used
 
-        # ---- JOYPAD INPUT (overrides all autopilot when connected) ----
-        joypad_active = False
-        joypad_fire_right = False
-        joypad_fire_up    = False
-        joypad_super_fire = False
-        if joypad is not None:
-            try:
-                _btn = joypad.read_buttons()
-                joypad_active = True
-                # Movement: 4 px per frame, clamped below
-                if _btn['L']: ship.x -= 4
-                if _btn['R']: ship.x += 4
-                if _btn['U']: ship.y -= 4
-                if _btn['D']: ship.y += 4
-                
-                # Manual Aim Control (X/Y strictly)
-                _manual_aim_up_held = _btn['X'] or _btn['Y']
-                ship.aim_up = _manual_aim_up_held or danger  # danger always forces aim_up
-                
-                # Fire Mapping
-                joypad_fire_right = _btn['A'] or _btn['+']
-                joypad_super_fire = _btn['B'] or _btn['-']
-                joypad_fire_up    = ship.aim_up and (joypad_fire_right or joypad_super_fire)
-            except Exception:
-                # I2C hiccup — treat as no input this frame
-                joypad_active = False
-
-        if not joypad_active:
-            # Ship aims up if village is in trouble or in danger
-            # Boss fights normally override upward aiming UNLESS it's a critical danger
-            if self.boss_active:
-                ship.aim_up = danger
-            else:
-                ship.aim_up = trouble or danger
-
-        ship.boss_mode = self.boss_active
-        ship.nuke_ready = danger
-        ship.update(t)
-        # Visual ship position (for collisions, firing origin AND halo)
-        self.ship_vx = ship.x + ship.ox
-        self.ship_vy = ship.y + ship.oy
+        joypad_active, jp_fire, jp_super = self._handle_input(t, danger, trouble)
         ship_x, ship_y = self.ship_vx, self.ship_vy
 
-        # ESCAPE/EVASION LOGIC: Pre-calculate counts/threats
-        alien_count = 0
+        # Count aliens + find nearest in one pass (used by autopilot and firing)
+        alien_count = 0; near_a = None; min_d2 = 999999.0
         for a in alien_pool:
-            if a.active: alien_count += 1
-        is_horde = alien_count > 10
-        near_a = self.get_nearest_alien(ship_x, ship_y)
-
-        if not joypad_active:
-            # ----- AUTOPILOT MOVEMENT -----
-            # Autonomous movement while aiming up: Glide under the target
-            if self.ship.aim_up:
-                tx = self.ship.x
-                if danger:
-                    tx, _ = self.env.get_celestial_coords(self.t)
-                elif trouble:
-                    tx = self.env.get_nearest_cloud_x(self.ship.x, self.t)
-
-                if tx is not None:
-                    if abs(self.ship.x - tx) > 3:
-                        self.ship.x += 4 if self.ship.x < tx else -4
-            else:
-                # Return to home position (left side, UNLESS in boss fight/horde)
-                home_x = 160 if self.boss_active or is_horde else 45
-                
-                # ESCAPE PROTOCOL: If any alien is too close during swarm, move exactly opposite
-                if near_a and (self.boss_active or is_horde):
-                    adx, ady = ship_x - near_a.x, ship_y - near_a.y
-                    dist_sq = adx*adx + ady*ady
-                    if dist_sq < 4225: # Inside 65px: DANGER!
-                        dist = math.sqrt(dist_sq)
-                        if dist > 0:
-                            # High-speed repulsion
-                            vx, vy = (adx / dist) * 6, (ady / dist) * 5
-                            
-                            # ANTI-STUCK: If hitting a boundary, sidestep perpendicular to the threat
-                            if (self.ship.x <= 20 or self.ship.x >= 300) and abs(vx) > 1:
-                                # If pinned horizontally, burst vertically
-                                self.ship.y += 5 if ady > 0 else -5
-                            if (self.ship.y <= 40 or self.ship.y >= 200) and abs(vy) > 1:
-                                # If pinned vertically, burst horizontally
-                                self.ship.x += 6 if adx > 0 else -6
-                                
-                            self.ship.x += vx
-                            self.ship.y += vy
-                    else:
-                        # No immediate death-spiral, return to home center
-                        if abs(self.ship.x - home_x) > 2:
-                            self.ship.x += 2 if self.ship.x < home_x else -2
-                else:
-                    # Regular drift to home
-                    if abs(self.ship.x - home_x) > 2:
-                        self.ship.x += 2 if self.ship.x < home_x else -2
-
-        # FINAL CLAMP: Move this to the end so evasion isn't choppy
-        self.ship.x = max(20, min(300, self.ship.x))
-        self.ship.y = max(40, min(200, self.ship.y))
-
-        # Spawning — suppressed during boss fight
-        if not self.boss_active:
-            spawn_threshold = 0.94
-            if self.score > 300:
-                spawn_threshold = max(0.70, 0.94 - ((self.score - 300) * 0.0004))
-            if random.random() > spawn_threshold:
-                self.spawn_alien()
-        
-        # Rain scales strictly with cloud count
-        cloud_count = self.env.get_all_cloud_x(self.t)
-        rain_chance = cloud_count * 0.16
-        if random.random() < rain_chance:
-            _rain_spawn(cloud_count, self.env._cloud_x_buf)
-
-        # Boss fight trigger
-        if (not self.boss_active and
-                self.score >= self.boss_next_threshold and
-                self.boss_defeat_timer == 0):
-            self.boss_active = True
-            self.spawn_boss_swarm()
-
-        # Boss fight end check
-        if self.boss_active:
-            boss_alive = False
-            for a in alien_pool:
-                if a.active and a.is_boss:
-                    boss_alive = True
-                    break
-            if not boss_alive:
-                self.boss_active = False
-                self.score += 50                       # bonus for clearing the swarm
-                self.boss_next_threshold = self.score + 1000 # Next boss much further away
-                self.boss_defeat_timer = 180           # show "BOSS DEFEATED!" for ~3s
-                self._unlock_ach('boss_slayer')
-                gc.collect()                           # reclaim memory from the boss swarm
-
-        # Boss defeat message countdown
-        if self.boss_defeat_timer > 0:
-            self.boss_defeat_timer -= 1
-
-        # Firing — rate scales with aliens; and house count affects fire rate/accuracy
-        # (alien_count already calculated for evasion above)
-
-        # Halo intrusion check (automated defense fire at night)
-        triggered_by_halo = False
-        if self.env.is_night:
-            for a in ALIEN_POOL.active_objects():
-                if a.active:
-                    adx = a.x - ship_x; ady = a.y - ship_y
-                    if adx*adx + ady*ady < 1764: # 42px radius squared
-                        triggered_by_halo = True
-                        break
-
-        house_count = len(self.env.houses)
-        is_danger   = self.score <= 50
-        
-        # House-based modifiers: more houses = more/better fire
-        fire_rate_penalty = (12 - house_count) * 0.015
-        miss_factor = (12 - house_count) * 0.35
-
-        is_horde = alien_count > 10
-        if self.boss_active or is_horde or (joypad_active and joypad_super_fire):
-            # HERO MODE: high frequency with cooldown if target present
-            fire_threshold = max(0.20, 0.60 - alien_count * 0.02 + fire_rate_penalty)
-            if self.ship.aim_up: fire_threshold = 0.15
-
-            target_a = self.get_nearest_alien(ship_x, ship_y)
-            # Joypad: fire buttons override probabilistic check
-            if joypad_active:
-                firing_up   = self.ship.aim_up and (joypad_fire_right or joypad_super_fire) and self.ship.fire_cooldown == 0
-                firing_side = not self.ship.aim_up and (joypad_fire_right or joypad_super_fire) and self.ship.fire_cooldown == 0
-                should_fire = firing_up or firing_side
-            else:
-                # Automatic fire is gated by the fire_cooldown for sustainability
-                should_fire = (random.random() > fire_threshold or triggered_by_halo or (target_a and not self.ship.aim_up))
-                should_fire = should_fire and (self.ship.fire_cooldown == 0)
-                firing_up   = should_fire and self.ship.aim_up
-                firing_side = should_fire and not self.ship.aim_up
-
-            if (self.ship.aim_up or alien_count > 0) and should_fire:
-                sx, sy = ship_x, ship_y
-                self.ship.fire_cooldown = 3 # Cooldown of 3 frames (~15-20 shots/sec)
-                # Each shot gets a small random deflection based on miss_factor
-                deflect = lambda: (random.random() - 0.5) * miss_factor
-                
-                if firing_up:
-                    # Cloud Eraser: Massive 7-way fan
-                    # If in danger, one laser targets the celestial body (Sun/Moon)
-                    cx, cy = self.env.get_celestial_coords(self.t)
-                    for offset in self._cloud_eraser_offsets:
-                        self.fire_laser(sx + offset, sy - 10, vx=0, vy=-12, is_up=True)
-                    if danger:
-                        # Seeker laser: targets celestial body X
-                        vx = float(cx - sx) * -12.0 / (cy - sy) if cy != sy else 0
-                        self.fire_laser(sx, sy - 10, vx=vx, vy=-12, is_up=True)
-                else:
-                    # MASSIVE FIREPOWER: 7-way spread, overlapping streams
-                    deflect_val = (random.random() - 0.5) * miss_factor
-                    self.fire_laser(sx + 10, sy,       vx=14, vy=deflect_val)   # centre
-                    self.fire_laser(sx + 5,  sy - 12,  vx=13, vy=deflect_val-1) # up
-                    self.fire_laser(sx + 5,  sy + 12,  vx=13, vy=deflect_val+1) # down
-                    self.fire_laser(sx,      sy - 24,  vx=12, vy=deflect_val-2) # wide up
-                    self.fire_laser(sx,      sy + 24,  vx=12, vy=deflect_val+2) # wide down
-                    self.fire_laser(sx - 5,  sy - 36,  vx=11, vy=deflect_val-3) # extreme up
-                    self.fire_laser(sx - 5,  sy + 36,  vx=11, vy=deflect_val+3) # extreme down
-                
-                self.ship.recoil = 5
-                # Ultra fast cooldown for massive fire
-                self.ship.fire_cooldown = 2 if not firing_up else 3
-                self.buzzer.set_tone(1800)
-            else:
-                if self.nuke_anim_timer > 0:
-                    self.buzzer.set_tone(random.randint(50, 150))
-                elif self.impact_timer > 0:
-                    self.buzzer.set_tone(random.randint(50, 250))
-                elif self.explode_timer > 0:
-                    self.buzzer.set_tone(random.randint(2000, 3000))
-                else:
-                    self.buzzer.set_tone(0)
-        else:
-            base_threshold = 0.75 if is_danger else 0.90
-            fire_threshold = max(0.50, base_threshold - alien_count * 0.02 + fire_rate_penalty)
-            if self.ship.aim_up: fire_threshold = 0.40
-
-            target_a = self.get_nearest_alien(ship_x, ship_y)
-            # Joypad: fire buttons override probabilistic check
-            if joypad_active:
-                firing_up   = self.ship.aim_up and joypad_fire_right and self.ship.fire_cooldown == 0
-                firing_side = not self.ship.aim_up and joypad_fire_right and self.ship.fire_cooldown == 0
-                should_fire = firing_up or firing_side
-            else:
-                should_fire = (random.random() > fire_threshold or triggered_by_halo or (target_a and not self.ship.aim_up))
-                should_fire = should_fire and (self.ship.fire_cooldown == 0)
-                firing_up   = should_fire and self.ship.aim_up
-                firing_side = should_fire and not self.ship.aim_up
-
-            if (self.ship.aim_up or alien_count > 0) and should_fire:
-                self.ship.fire_cooldown = 4 # slightly slower in regular mode
-                deflect_val = (random.random() - 0.5) * miss_factor
-                if firing_up:
-                    # Fire UP at clouds (Massive 3-way spread + optional seeker)
-                    sx, sy = ship_x, ship_y
-                    self.fire_laser(sx,      sy - 10, vx=0, vy=-12, is_up=True)
-                    self.fire_laser(sx - 15, sy - 5,  vx=0, vy=-12, is_up=True)
-                    self.fire_laser(sx + 15, sy - 5,  vx=0, vy=-12, is_up=True)
-                    if danger:
-                        cx, cy = self.env.get_celestial_coords(self.t)
-                        vx = float(cx - sx) * -12.0 / (cy - sy) if cy != sy else 0
-                        self.fire_laser(sx, sy - 10, vx=vx, vy=-12, is_up=True)
-                else:
-                    # Fire RIGHT at aliens with angular aiming (-60 to 60 deg)
-                    target_a = self.get_nearest_alien(ship_x, ship_y)
-                    vx, vy = 12, deflect_val
-                    if target_a:
-                        dx = target_a.x - ship_x
-                        dy = target_a.y - ship_y
-                        angle = math.atan2(dy, dx)
-                        # Clamp to -60 to 60 degrees
-                        limit = 60 * math.pi / 180
-                        angle = max(-limit, min(limit, angle))
-                        vx = 12 * math.cos(angle)
-                        vy = 12 * math.sin(angle)
-                    
-                    self.fire_laser(ship_x + 10, ship_y, vx=vx, vy=vy)
-                    if is_danger:
-                        self.fire_laser(ship_x, ship_y - 15, vx=vx, vy=vy)
-                        self.fire_laser(ship_x, ship_y + 15, vx=vx, vy=vy)
-                self.ship.recoil = 5
-                self.buzzer.set_tone(1500 if is_danger else 1200)
-            else:
-                if self.nuke_anim_timer > 0:
-                    self.buzzer.set_tone(random.randint(50, 150))
-                elif self.impact_timer > 0:
-                    self.buzzer.set_tone(random.randint(50, 250))
-                elif self.explode_timer > 0:
-                    self.buzzer.set_tone(random.randint(2000, 3000))
-                else:
-                    self.buzzer.set_tone(0)
-
-        # All aliens fire back — each active alien has a small frame chance
-        for a in ALIEN_POOL.active_objects():
             if a.active:
-                # Base probabilities: bosses fire much faster now
-                prob = 0.12 if a.is_boss else 0.005
-                
-                # Homing aliens fire wildly as they approach
-                if a.target:
-                    dx = a.x - ship_x; dy = a.y - ship_y
-                    dist_sq = dx*dx + dy*dy
-                    # If within ~150px, triple the fire rate; otherwise 1.5x
-                    prob *= 3.0 if dist_sq < 22500 else 1.5
-                
-                if random.random() < prob:
-                    el = ENEMY_LASER_POOL.get()
-                    if el is not None:
-                        el.reset(int(a.x) - 8, int(a.y))
+                alien_count += 1
+                dx = a.x - ship_x; dy = a.y - ship_y
+                d2 = dx*dx + dy*dy
+                if d2 < min_d2: min_d2 = d2; near_a = a
+        is_horde = alien_count > 10
 
-        # ---- Rain update (index-based, no object allocation) ----
-        for i in range(_RAIN_MAX):
-            if _rain_live[i]:
-                _rain_y[i] += _rain_spd[i]
-                
-                # Ship collision check (penalty for getting wet!)
-                dx = _rain_x[i] - ship_x
-                dy = _rain_y[i] - ship_y
-                if dx*dx + dy*dy < 144: # ~12px hit radius
-                    self.score = max(0, self.score - 1)
-                    _rain_live[i] = False
-                    self.spawn_particles(_rain_x[i], _rain_y[i], 2, is_water=True)
-                    continue
-                
-                # Check house damage from rain
-                if self.env.check_house_damage(_rain_x[i], _rain_y[i], self.t):
-                    _rain_live[i] = False
-                    self.spawn_particles(_rain_x[i], _rain_y[i], 4, is_water=True)
-                    continue
+        self._update_autopilot(joypad_active, danger, trouble, is_horde, ship_x, ship_y, near_a)
+        self._handle_spawning(alien_pool)
+        self._handle_firing(ship_x, ship_y, alien_count, is_horde, joypad_active, jp_fire, jp_super, danger)
+        self._update_collisions(ship_x, ship_y, alien_pool, laser_pool, enemy_laser_pool, self.env, t)
 
-                if _rain_y[i] > 240:
-                    self.spawn_particles(_rain_x[i], 240,
-                                         random.randint(2, 4), is_water=True)
-                    _rain_live[i] = False
-
-        # ---- Enemy laser update + ship collision ----
-        for el in enemy_laser_pool:
-            if not el.active:
-                continue
-            el.update()
-            if not el.active:
-                continue
-            dx = el.x - ship_x; dy = el.y - ship_y
-            if dx*dx + dy*dy < 225:          # ~15px hit radius
-                penalty = max(5, self.score // 10)   # 10% of score, min 5
-                self.score = max(0, self.score - penalty)
-                self.impact_timer = 10
-                self.spawn_particles(ship_x, ship_y, 6)
-                el.active = False
-                if self.score <= 0:
-                    self.game_over = True
-                    self.pause_timer = 150
-                    self._music.play(_music.GAME_OVER)
-
-        # ---- Laser update + collision ----
-        for l in laser_pool:
-            if not l.active:
-                continue
-            l.update()
-            if not l.active:
-                continue
-            lx = l.x; ly = l.y
-
-            # Cloud/Celestial check (if firing up)
-            if l.is_up:
-                res = env.check_cloud_damage(lx, ly, t)
-                if res:
-                    self.score += 10 # Score for hitting/destroying cloud
-                    self.explode_timer = 2
-                    self.spawn_particles(lx, ly, 4, is_water=True)
-                    if res == 2:
-                        # CLOUD DESTROYED: trigger recovery window
-                        self.cloud_revert_timer = 100
-                        self._clouds_destroyed += 1
-                        if self._clouds_destroyed >= 10:
-                            self._unlock_ach('cloud_buster')
-                    l.active = False
-                    continue
-                # NUKE CHECK: Shoot the sun/moon to wipe the screen
-                if (self.score < 40 or len(env.houses) < 6) and not self.nuke_used:
-                    if env.check_celestial_damage(lx, ly, t):
-                        self.score += 100 # Huge bonus for nuclear trigger
-                        print("Nuclear")
-                        self.nuke_used = True
-                        self.nuke_anim_timer = 60
-                        self._unlock_ach('nuke_em')
-                        # Clear everything
-                        for a in alien_pool: a.active = False
-                        for el in enemy_laser_pool: el.active = False
-                        env.clouds = []
-                        env.cloud_pens = []
-                        l.active = False
-                        continue
-            
-            for a in alien_pool:
-                if not a.active:
-                    continue
-                dx = lx - a.x; dy = ly - a.y
-                if dx*dx + dy*dy < 144:
-                    self.score += 10
-                    self.explode_timer = 5
-                    self.spawn_particles(a.x, a.y, 8)
-                    a.hp -= 1
-                    if a.hp <= 0:
-                        self.score += 20 if a.is_boss else 10 # More points for elites/bosses
-                        a.active = False
-                        self._aliens_killed += 1
-                        if self._aliens_killed == 1:
-                            self._unlock_ach('first_blood')
-                    l.active = False
-                    break
-
-        # ---- Alien update + ship collision ----
-        for a in alien_pool:
-            if not a.active:
-                continue
-            a.update()
-            if not a.active:
-                continue
-            dx = ship_x - a.x; dy = ship_y - a.y
-            if dx*dx + dy*dy < 100:
-                penalty = 150 if self.boss_active else 50
-                self.score -= penalty
-                self._untouchable = False
-                self.impact_timer = 15
-                self.spawn_particles(ship_x, ship_y, 20)
-                a.active = False
-                if self.score <= 0:
-                    self.score = 0
-                    self.game_over = True
-                    self.pause_timer = 150
-                    self._music.play(_music.GAME_OVER)
-
-        # ---- Particle update ----
         for p in PARTICLE_POOL._pool:
-            if p.active:
-                p.update()
+            if p.active: p.update()
 
-        # ---- Budgeted GC: only collect when needed ----
+        # Budgeted GC
         self._gc_countdown -= 1
         if self._gc_countdown <= 0:
             free = gc.mem_free()
             if free < 20000:
-                gc.collect()
-                self._gc_countdown = 60   # after a collect, wait 60 frames
+                gc.collect(); self._gc_countdown = 60
             else:
-                self._gc_countdown = 300  # plenty of memory, check again in 300 frames
+                self._gc_countdown = 300
 
-        # ---- Achievement score milestones (cheap set-lookup guards) ----
+        # Achievement score milestones
         s = self.score
-        if s >= 500 and self._untouchable:
-            self._unlock_ach('untouchable')
+        if s >= 500 and self._untouchable:  self._unlock_ach('untouchable')
         if s >= 1000:
             self._unlock_ach('centurion')
-            if len(self.env.houses) == 12:
-                self._unlock_ach('village_guardian')
-        if s >= 2000:
-            self._unlock_ach('legendary')
-
-        # ---- Achievement notification countdown ----
-        if self.ach_notify_timer > 0:
-            self.ach_notify_timer -= 1
+            if len(self.env.houses) == 12:  self._unlock_ach('village_guardian')
+        if s >= 2000:                        self._unlock_ach('legendary')
+        if self.ach_notify_timer > 0:        self.ach_notify_timer -= 1
 
     # -----------------------------------------------------------------------
     def _update_leds(self):
