@@ -397,8 +397,22 @@ class Game:
         else:                          b.set_tone(0)
 
     @micropython.native
+    def _compute_fire(self, fire_threshold, joypad_active, jp_btn, target_a, triggered_by_halo):
+        """Returns (should_fire, firing_up, firing_side) given mode-specific inputs."""
+        ship = self.ship
+        if joypad_active:
+            firing_up   = ship.aim_up and jp_btn and ship.fire_cooldown == 0
+            firing_side = not ship.aim_up and jp_btn and ship.fire_cooldown == 0
+            should_fire = firing_up or firing_side
+        else:
+            should_fire = (random.random() > fire_threshold or triggered_by_halo or (target_a and not ship.aim_up)) and ship.fire_cooldown == 0
+            firing_up   = should_fire and ship.aim_up
+            firing_side = should_fire and not ship.aim_up
+        return should_fire, firing_up, firing_side
+
+    @micropython.native
     def _handle_firing(self, ship_x, ship_y, alien_count, is_horde,
-                        joypad_active, jp_fire, jp_super, danger):
+                        joypad_active, jp_fire, jp_super, danger, near_a):
         """Player firing (hero + standard modes) and alien return fire."""
         ship = self.ship; env = self.env; buzzer = self.buzzer
 
@@ -406,12 +420,11 @@ class Game:
         triggered_by_halo = False
         if env.is_night:
             for a in ALIEN_POOL.active_objects():
-                if a.active:
-                    adx = a.x - ship_x; ady = a.y - ship_y
-                    if adx*adx + ady*ady < 1764:
-                        triggered_by_halo = True; break
+                adx = a.x - ship_x; ady = a.y - ship_y
+                if adx*adx + ady*ady < 1764:
+                    triggered_by_halo = True; break
 
-        house_count       = len(env.houses)
+        house_count       = env.house_count
         is_danger         = self.score <= 50
         fire_rate_penalty = (12 - house_count) * 0.015
         miss_factor       = (12 - house_count) * 0.35
@@ -420,15 +433,9 @@ class Game:
             # ---- HERO MODE ----
             fire_threshold = max(0.20, 0.60 - alien_count * 0.02 + fire_rate_penalty)
             if ship.aim_up: fire_threshold = 0.15
-            target_a = self.get_nearest_alien(ship_x, ship_y)
-            if joypad_active:
-                firing_up   = ship.aim_up and (jp_fire or jp_super) and ship.fire_cooldown == 0
-                firing_side = not ship.aim_up and (jp_fire or jp_super) and ship.fire_cooldown == 0
-                should_fire = firing_up or firing_side
-            else:
-                should_fire = (random.random() > fire_threshold or triggered_by_halo or (target_a and not ship.aim_up)) and ship.fire_cooldown == 0
-                firing_up   = should_fire and ship.aim_up
-                firing_side = should_fire and not ship.aim_up
+            target_a = near_a
+            should_fire, firing_up, firing_side = self._compute_fire(
+                fire_threshold, joypad_active, jp_fire or jp_super, target_a, triggered_by_halo)
             if (ship.aim_up or alien_count > 0) and should_fire:
                 sx, sy = ship_x, ship_y
                 if firing_up:
@@ -457,15 +464,9 @@ class Game:
             base_threshold = 0.75 if is_danger else 0.90
             fire_threshold = max(0.50, base_threshold - alien_count * 0.02 + fire_rate_penalty)
             if ship.aim_up: fire_threshold = 0.40
-            target_a = self.get_nearest_alien(ship_x, ship_y)
-            if joypad_active:
-                firing_up   = ship.aim_up and jp_fire and ship.fire_cooldown == 0
-                firing_side = not ship.aim_up and jp_fire and ship.fire_cooldown == 0
-                should_fire = firing_up or firing_side
-            else:
-                should_fire = (random.random() > fire_threshold or triggered_by_halo or (target_a and not ship.aim_up)) and ship.fire_cooldown == 0
-                firing_up   = should_fire and ship.aim_up
-                firing_side = should_fire and not ship.aim_up
+            target_a = near_a
+            should_fire, firing_up, firing_side = self._compute_fire(
+                fire_threshold, joypad_active, jp_fire, target_a, triggered_by_halo)
             if (ship.aim_up or alien_count > 0) and should_fire:
                 ship.fire_cooldown = 4
                 dv = (random.random() - 0.5) * miss_factor
@@ -497,15 +498,14 @@ class Game:
 
         # Alien return fire
         for a in ALIEN_POOL.active_objects():
-            if a.active:
-                prob = 0.12 if a.is_boss else 0.005
-                if a.target:
-                    dx = a.x - ship_x; dy = a.y - ship_y
-                    prob *= 3.0 if dx*dx + dy*dy < 22500 else 1.5
-                if random.random() < prob:
-                    el = ENEMY_LASER_POOL.get()
-                    if el is not None:
-                        el.reset(int(a.x) - 8, int(a.y))
+            prob = 0.12 if a.is_boss else 0.005
+            if a.target:
+                dx = a.x - ship_x; dy = a.y - ship_y
+                prob *= 3.0 if dx*dx + dy*dy < 22500 else 1.5
+            if random.random() < prob:
+                el = ENEMY_LASER_POOL.get()
+                if el is not None:
+                    el.reset(int(a.x) - 8, int(a.y))
 
     # -----------------------------------------------------------------------
     @micropython.native
@@ -561,13 +561,13 @@ class Game:
                         if self._clouds_destroyed >= 10:
                             self._unlock_ach('cloud_buster')
                     l.active = False; continue
-                if (self.score < 40 or len(env.houses) < 6) and not self.nuke_used:
+                if (self.score < 40 or env.house_count < 6) and not self.nuke_used:
                     if env.check_celestial_damage(lx, ly, t):
                         self.score += 100; self.nuke_used = True; self.nuke_anim_timer = 60
                         self._unlock_ach('nuke_em')
                         for a in alien_pool: a.active = False
                         for el in enemy_laser_pool: el.active = False
-                        env.clouds = []; env.cloud_pens = []
+                        env.clear_clouds()
                         l.active = False; continue
             for a in alien_pool:
                 if not a.active: continue
@@ -628,16 +628,18 @@ class Game:
             presto = self.presto; joypad = self.joypad
             presto.touch.poll()
             if presto.touch.state:
-                self.in_intro = False; self._music.stop(); return
+                self.in_intro = False; self._music.stop()
+                self._update_leds(); return
             if joypad:
                 try:
                     for b in joypad.read_buttons().values():
-                        if b: self.in_intro = False; self._music.stop(); return
+                        if b: self.in_intro = False; self._music.stop()
+                        self._update_leds(); return
                 except: pass
-            return
+            self._update_leds(); return
 
         if self.pause_timer > 0:
-            return
+            self._update_leds(); return
 
         # Decrement global timers
         if self.cloud_revert_timer > 0: self.cloud_revert_timer -= 1
@@ -646,8 +648,8 @@ class Game:
         if self.nuke_anim_timer > 0:    self.nuke_anim_timer -= 1
 
         self.env.update(t % (self.PHASE_LEN * 4), self.PHASE_LEN)
-        trouble = len(self.env.houses) < 6 and len(self.env.clouds) > 0 and self.cloud_revert_timer == 0
-        danger  = (self.score < 40 or len(self.env.houses) < 6) and not self.nuke_used
+        trouble = self.env.house_count < 6 and self.env.cloud_count > 0 and self.cloud_revert_timer == 0
+        danger  = (self.score < 40 or self.env.house_count < 6) and not self.nuke_used
 
         joypad_active, jp_fire, jp_super = self._handle_input(t, danger, trouble)
         ship_x, ship_y = self.ship_vx, self.ship_vy
@@ -664,7 +666,7 @@ class Game:
 
         self._update_autopilot(joypad_active, danger, trouble, is_horde, ship_x, ship_y, near_a)
         self._handle_spawning(alien_pool)
-        self._handle_firing(ship_x, ship_y, alien_count, is_horde, joypad_active, jp_fire, jp_super, danger)
+        self._handle_firing(ship_x, ship_y, alien_count, is_horde, joypad_active, jp_fire, jp_super, danger, near_a)
         self._update_collisions(ship_x, ship_y, alien_pool, laser_pool, enemy_laser_pool, self.env, t)
 
         for p in PARTICLE_POOL._pool:
@@ -684,9 +686,10 @@ class Game:
         if s >= 500 and self._untouchable:  self._unlock_ach('untouchable')
         if s >= 1000:
             self._unlock_ach('centurion')
-            if len(self.env.houses) == 12:  self._unlock_ach('village_guardian')
+            if self.env.house_count == 12:  self._unlock_ach('village_guardian')
         if s >= 2000:                        self._unlock_ach('legendary')
         if self.ach_notify_timer > 0:        self.ach_notify_timer -= 1
+        self._update_leds()
 
     # -----------------------------------------------------------------------
     def _update_leds(self):
@@ -829,35 +832,8 @@ class Game:
         self.draw_hud(self._score_str, 5, 5, 2)
         self.draw_hud(self._hi_str, 240, 5, 2)
 
-        # Boss fight overlays
-        if self.boss_active:
-            # Flashing red border (flashes every 15 frames)
-            if (self.t // 15) % 2 == 0:
-                d.set_pen(self.pen_boss_border)
-                d.line(0, 0,   319, 0)    # top
-                d.line(0, 239, 319, 239)  # bottom
-                d.line(0, 0,   0,   239)  # left
-                d.line(319, 0, 319, 239)  # right
-            # "BOSS FIGHT!" title
-            d.set_pen(self.pen_boss_shadow)
-            d.text("BOSS FIGHT!", 87, 27, 320, 2)
-            d.set_pen(self.pen_boss_hud)
-            d.text("BOSS FIGHT!", 85, 25, 320, 2)
-            # Remaining boss count
-            boss_left = 0
-            for a in ALIEN_POOL._pool:
-                if a.active and a.is_boss:
-                    boss_left += 1
-            d.set_pen(self.pen_boss_shadow)
-            d.text(f"x{boss_left}", 162, 47, 320, 2)
-            d.set_pen(self.pen_boss_hud)
-            d.text(f"x{boss_left}", 160, 45, 320, 2)
-
-        if self.boss_defeat_timer > 0:
-            d.set_pen(self.pen_boss_shadow)
-            d.text("BOSS DEFEATED! +50", 47, 107, 320, 2)
-            d.set_pen(self.pen_boss_hud)
-            d.text("BOSS DEFEATED! +50", 45, 105, 320, 2)
+        if self.boss_active or self.boss_defeat_timer > 0:
+            self._draw_boss_overlay(d)
 
         if self.pause_timer > 0:
             if self.game_over:
@@ -866,43 +842,7 @@ class Game:
                 self.draw_hud("HOURLY VICTORY!", 70, 100, 2)
 
         if self.in_intro:
-            d = self.display
-            # Dim the background a bit
-            fast_dimmer(d, self.pen_boss_shadow)
-            
-            # MISSION Header
-            d.set_pen(self.pen_hud)
-            d.text("DAN DARE: PROCTOR OF THE VILLAGE", 10, 20, 320, 2)
-            
-            # Mission Info
-            d.set_pen(self.pen_alien_glow)
-            d.text("MISSION: Protect houses from Acid Rain & Aliens", 10, 45, 300, 2)
-            
-            # Controls Section
-            d.set_pen(self.pen_up_laser)
-            if self.joypad:
-                d.text("JOYPAD DETECTED - MANUAL MODE:", 10, 75, 300, 2)
-                d.set_pen(self.pen_water)
-                d.text("D-PAD : Move Ship", 20, 95, 300, 1)
-                d.text("A / + : Standard Fire", 20, 110, 300, 1)
-                d.text("B / - : SUPER FIRE (7-WAY)", 20, 125, 300, 1)
-                d.text("X / Y : AIM UP (Clear Clouds)", 20, 140, 300, 1)
-            else:
-                d.text("NO JOYPAD - AUTOPILOT ACTIVE", 10, 75, 300, 2)
-                d.set_pen(self.pen_water)
-                d.text("Ship will defend the village automatically.", 20, 95, 300, 1)
-
-            # Mechanics & Tips
-            d.set_pen(self.pen_particle)
-            d.text("PRO-TIPS:", 10, 165, 300, 2)
-            d.set_pen(self.pen_water)
-            d.text("- Shoot CLOUDS to stop toxic rain", 20, 185, 300, 1)
-            d.text("- Shoot SUN/MOON for NUKE screen-wipe", 20, 200, 300, 1)
-            d.text("- Alien +10 pts | Hit -50 pts", 20, 215, 300, 1)
-
-            d.set_pen(self.pen_boss_hud)
-            if (self.t // 15) % 2 == 0:
-                d.text("TOUCH SCREEN OR PRESS BUTTON TO START", 15, 227, 300, 1)
+            self._draw_intro_screen(d)
 
         # Achievement: persistent count (bottom-right HUD)
         ach_str = f'{len(self.achievements)}/{_ach.TOTAL}'
@@ -918,8 +858,60 @@ class Game:
             d.set_pen(self.pen_ach)
             d.text(self.ach_notify_text, 10, 220, 310, 1)
 
-        self._update_leds()
         self.presto.update()
+
+    def _draw_boss_overlay(self, d):
+        """Boss fight and boss-defeated overlays."""
+        if self.boss_active:
+            if (self.t // 15) % 2 == 0:
+                d.set_pen(self.pen_boss_border)
+                d.line(0, 0,   319, 0)
+                d.line(0, 239, 319, 239)
+                d.line(0, 0,   0,   239)
+                d.line(319, 0, 319, 239)
+            d.set_pen(self.pen_boss_shadow)
+            d.text("BOSS FIGHT!", 87, 27, 320, 2)
+            d.set_pen(self.pen_boss_hud)
+            d.text("BOSS FIGHT!", 85, 25, 320, 2)
+            boss_left = sum(1 for a in ALIEN_POOL.active_objects() if a.is_boss)
+            d.set_pen(self.pen_boss_shadow)
+            d.text(f"x{boss_left}", 162, 47, 320, 2)
+            d.set_pen(self.pen_boss_hud)
+            d.text(f"x{boss_left}", 160, 45, 320, 2)
+        if self.boss_defeat_timer > 0:
+            d.set_pen(self.pen_boss_shadow)
+            d.text("BOSS DEFEATED! +50", 47, 107, 320, 2)
+            d.set_pen(self.pen_boss_hud)
+            d.text("BOSS DEFEATED! +50", 45, 105, 320, 2)
+
+    def _draw_intro_screen(self, d):
+        """Full intro/title screen overlay."""
+        fast_dimmer(d, self.pen_boss_shadow)
+        d.set_pen(self.pen_hud)
+        d.text("DAN DARE: PROCTOR OF THE VILLAGE", 10, 20, 320, 2)
+        d.set_pen(self.pen_alien_glow)
+        d.text("MISSION: Protect houses from Acid Rain & Aliens", 10, 45, 300, 2)
+        d.set_pen(self.pen_up_laser)
+        if self.joypad:
+            d.text("JOYPAD DETECTED - MANUAL MODE:", 10, 75, 300, 2)
+            d.set_pen(self.pen_water)
+            d.text("D-PAD : Move Ship", 20, 95, 300, 1)
+            d.text("A / + : Standard Fire", 20, 110, 300, 1)
+            d.text("B / - : SUPER FIRE (7-WAY)", 20, 125, 300, 1)
+            d.text("X / Y : AIM UP (Clear Clouds)", 20, 140, 300, 1)
+        else:
+            d.text("NO JOYPAD - AUTOPILOT ACTIVE", 10, 75, 300, 2)
+            d.set_pen(self.pen_water)
+            d.text("Ship will defend the village automatically.", 20, 95, 300, 1)
+        d.set_pen(self.pen_particle)
+        d.text("PRO-TIPS:", 10, 165, 300, 2)
+        d.set_pen(self.pen_water)
+        d.text("- Shoot CLOUDS to stop toxic rain", 20, 185, 300, 1)
+        d.text("- Shoot SUN/MOON for NUKE screen-wipe", 20, 200, 300, 1)
+        d.text("- Alien +10 pts | Hit -50 pts", 20, 215, 300, 1)
+        d.set_pen(self.pen_boss_hud)
+        if (self.t // 15) % 2 == 0:
+            d.text("TOUCH SCREEN OR PRESS BUTTON TO START", 15, 227, 300, 1)
 
     # -----------------------------------------------------------------------
     def run(self):

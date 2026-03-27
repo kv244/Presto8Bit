@@ -9,14 +9,16 @@ class Environment:
         self.fractal_bg = [random.randint(70, 140) for _ in range(30)]
         self.fractal_fg = [random.randint(30, 70) for _ in range(20)]
         self.stars = [(random.randint(0, 320), random.randint(0, 240)) for _ in range(20)]
-        # Clouds: [x, y, speed, rgb_tuple, health]
+        # Clouds: [x, y, speed, rgb_tuple, health, active] — fixed 5 slots, no pop()
         self.clouds = [[
             random.randint(0, 320), random.randint(20, 50), random.uniform(0.2, 0.4),
-            (random.randint(140, 180), random.randint(190, 230), 255), 3
+            (random.randint(140, 180), random.randint(190, 230), 255), 3, True
         ] for _ in range(5)]
-        # Houses: [x, width, height, health]
-        self.houses = [[random.randint(0, 319), random.randint(10, 25), random.randint(15, 40), random.randint(3, 7)] for _ in range(12)]
-        
+        self.cloud_count = 5  # maintained on activate/deactivate
+        # Houses: [x, width, height, health, active] — fixed 12 slots, no pop()
+        self.houses = [[random.randint(0, 319), random.randint(10, 25), random.randint(15, 40), random.randint(3, 7), True] for _ in range(12)]
+        self.house_count = 12  # maintained on activate/deactivate
+
         self._cloud_x_buf = [0] * 5  # Pre-allocated buffer to avoid per-frame list churn
 
         self.DAY_SKY    = (245, 245, 250)
@@ -33,7 +35,7 @@ class Environment:
         self.pen_moon   = d.create_pen(180, 160, 100)
         self.pen_sun_o  = d.create_pen(255, 140, 0)
         self.pen_sun_i  = d.create_pen(255, 200, 0)
-        # Cloud pens — one per cloud (randomised at init, unchanging)
+        # Cloud pens — one per slot (pre-allocated; updated on respawn, never popped)
         self.cloud_pens = [d.create_pen(*c[3]) for c in self.clouds]
         # Window pens
         self.pen_win_day   = d.create_pen(160, 200, 250)
@@ -85,23 +87,29 @@ class Environment:
             self._pen_fg    = get_asm_pen(d, self._C_FG_DAY, self._C_FG_NIGHT,  self.trans)
             self._pen_house = get_asm_pen(d, self._C_HS_DAY, self._C_HS_NIGHT,  self.trans)
 
-        # Respawn houses if they were destroyed by rain
-        if len(self.houses) < 12 and random.random() > 0.99:
-            # Spawn a new house "behind" the scrolling horizon
+        # Respawn houses if any slot was deactivated by rain damage
+        if self.house_count < 12 and random.random() > 0.99:
             scroll = (cycle_timer * 2) % 320
-            # Put it at a position that will scroll in from the right
             new_x = (scroll + 320 + random.randint(0, 50)) % 320
-            self.houses.append([new_x, random.randint(10, 25), random.randint(15, 40), random.randint(3, 7)])
+            for h in self.houses:
+                if not h[4]:
+                    h[0] = new_x; h[1] = random.randint(10, 25)
+                    h[2] = random.randint(15, 40); h[3] = random.randint(3, 7)
+                    h[4] = True
+                    self.house_count += 1
+                    break
 
-        # Respawn clouds if they were destroyed
-        if len(self.clouds) < 5 and random.random() > 0.995:
-            self.clouds.append([
-                random.randint(0, 320), random.randint(20, 50), random.uniform(0.2, 0.4),
-                (random.randint(140, 180), random.randint(190, 230), 255), 3
-            ])
-            # Regenerate pens to match count (simple for now)
-            new_c = self.clouds[-1]
-            self.cloud_pens.append(self.display.create_pen(*new_c[3]))
+        # Respawn clouds if any slot was deactivated by laser damage
+        if self.cloud_count < 5 and random.random() > 0.995:
+            for i, c in enumerate(self.clouds):
+                if not c[5]:
+                    c[0] = random.randint(0, 320); c[1] = random.randint(20, 50)
+                    c[2] = random.uniform(0.2, 0.4)
+                    c[3] = (random.randint(140, 180), random.randint(190, 230), 255)
+                    c[4] = 3; c[5] = True
+                    self.cloud_pens[i] = self.display.create_pen(*c[3])
+                    self.cloud_count += 1
+                    break
 
     @micropython.native
     def draw_layer0(self, t):
@@ -124,8 +132,9 @@ class Environment:
             d.set_pen(self.pen_sun_o); d.circle(sx, sun_y, 26)
             d.set_pen(self.pen_sun_i); d.circle(sx, sun_y, 18)
 
-        # Clouds (use cached per-cloud pens)
+        # Clouds (skip inactive slots)
         for idx, c in enumerate(self.clouds):
+            if not c[5]: continue
             d.set_pen(self.cloud_pens[idx])
             cx = int((c[0] - t * c[2]) % 340) - 20
             cy = c[1]
@@ -155,9 +164,10 @@ class Environment:
                 d.triangle(px1, py1, px2, py2, px1, 240)
                 d.triangle(px2, py2, px2, 240, px1, 240)
 
-        # Ground Features (Houses)
+        # Ground Features (Houses — skip inactive slots)
         win_pen = self.pen_win_night if self.is_night else self.pen_win_day
         for h in self.houses:
+            if not h[4]: continue
             for ox in [0, 320]:
                 hx = int(h[0] - ((t * 2) % 320) + ox)
                 if -40 < hx < 340:
@@ -172,35 +182,34 @@ class Environment:
     def check_house_damage(self, x, y, t):
         """Checks if a point (x, y) hit any house, accounting for scroll."""
         scroll = self._scroll
-        # Iterate backwards to safely remove items while iterating
-        for i in range(len(self.houses) - 1, -1, -1):
-            h = self.houses[i]
-            for ox in [-320, 0, 320]: # Check all wrap-around instances
+        for h in self.houses:
+            if not h[4]: continue
+            for ox in [-320, 0, 320]:
                 hx = h[0] - scroll + ox
                 if hx < x < hx + h[1] and 240 - h[2] < y < 240:
-                    h[3] -= 1 # damage health
+                    h[3] -= 1
                     if h[3] <= 0:
-                        self.houses.pop(i)
+                        h[4] = False
+                        self.house_count -= 1
                     return True
         return False
 
     def get_all_cloud_x(self, t):
-        """Returns the number of clouds and populates their screen X into internal buffer."""
-        # Using the list as a buffer to avoid per-frame allocation
-        count = len(self.clouds)
-        for i in range(count):
-            c = self.clouds[i]
-            # Ensure we don't return more than 5 (our usual max)
-            if i >= 5: break
-            self._cloud_x_buf[i] = int((c[0] - t * c[2]) % 340) - 20
-        return count
+        """Returns the number of active clouds and packs their screen X into the buffer."""
+        buf_idx = 0
+        for c in self.clouds:
+            if c[5]:
+                self._cloud_x_buf[buf_idx] = int((c[0] - t * c[2]) % 340) - 20
+                buf_idx += 1
+        return self.cloud_count
 
     def get_nearest_cloud_x(self, ship_x, t):
-        """Returns the X coordinate of the cloud horizontally closest to ship_x."""
-        if not self.clouds: return None
+        """Returns the X coordinate of the active cloud horizontally closest to ship_x."""
+        if self.cloud_count == 0: return None
         best_x = None
         min_dist = 9999
         for c in self.clouds:
+            if not c[5]: continue
             cx = int((c[0] - t * c[2]) % 340) - 20
             dist = abs(cx - ship_x)
             if dist < min_dist:
@@ -209,22 +218,25 @@ class Environment:
         return best_x
 
     def check_cloud_damage(self, x, y, t):
-        """Checks if a point (x, y) hit any cloud."""
-        buf = self._cloud_x_buf
-        for i in range(len(self.clouds) - 1, -1, -1):
-            cx = buf[i]
-            cy = self.clouds[i][1]
-            
-            # Rough bounding box for the cloud cluster
+        """Checks if a point (x, y) hit any active cloud."""
+        for c in self.clouds:
+            if not c[5]: continue
+            cx = int((c[0] - t * c[2]) % 340) - 20
+            cy = c[1]
             if cx - 10 < x < cx + 25 and cy - 10 < y < cy + 10:
-                c = self.clouds[i]
-                c[4] -= 1 # damage health
+                c[4] -= 1
                 if c[4] <= 0:
-                    self.clouds.pop(i)
-                    self.cloud_pens.pop(i)
-                    return 2 # KILLED
-                return 1 # HIT
-        return 0 # MISS
+                    c[5] = False
+                    self.cloud_count -= 1
+                    return 2  # KILLED
+                return 1  # HIT
+        return 0  # MISS
+
+    def clear_clouds(self):
+        """Deactivate all clouds (used by nuke)."""
+        for c in self.clouds:
+            c[5] = False
+        self.cloud_count = 0
 
     def get_celestial_coords(self, t):
         """Returns the current screen (x, y) for the sun or moon."""

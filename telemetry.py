@@ -19,6 +19,8 @@
 #   self._prev_score = self.score          # keep for next frame's reward
 
 import gc
+from dandare import _rain_live
+from entities import ALIEN_POOL, LASER_POOL, ENEMY_LASER_POOL
 
 # ── CSV header ──────────────────────────────────────────────────────────────
 # Observation columns
@@ -128,14 +130,12 @@ class Telemetry:
 
     @staticmethod
     def _rain_count():
-        from dandare import _rain_live  # import at call-time to avoid circular
         return sum(1 for v in _rain_live if v)
 
     # ── main entry point ────────────────────────────────────────────────────
 
     def step(self, game):
         """Call once per frame, at the END of Game.update()."""
-        from entities import ALIEN_POOL, LASER_POOL, ENEMY_LASER_POOL  # local import
 
         # ── score delta (reward) ────────────────────────────────────────────
         if self._prev_score is None:

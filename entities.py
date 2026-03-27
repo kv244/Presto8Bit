@@ -202,6 +202,12 @@ class Pool:
                 return obj
         return None  # pool exhausted - caller should skip
 
+    def active_objects(self):
+        """Yield only active objects — no allocation."""
+        for obj in self._pool:
+            if obj.active:
+                yield obj
+
     def clear(self):
         """Deactivate all objects in the pool."""
         for obj in self._pool:
