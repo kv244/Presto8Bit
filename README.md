@@ -58,6 +58,37 @@ To maintain high FPS on the RP2350, critical path routines use specialized emitt
 *   **Targeted GC Windows:** `gc.collect()` is called at two high-value moments—immediately when a boss swarm is defeated (reclaiming all 16 alien objects at once) and at the start of each game reset (before new `Environment`/`Ship` objects are allocated), minimising peak heap pressure.
 *   **`__slots__` on All Entity Classes:** `Alien`, `Laser`, `EnemyLaser`, `Particle`, and `Game` all declare `__slots__`, eliminating per-instance `__dict__` overhead and ensuring strict attribute safety on MicroPython.
 
+## 🏆 Achievements
+
+Nine persistent achievements are tracked in `achievements.json` and survive across sessions. A gold notification banner appears for ~3 seconds on unlock. The current count is shown in the bottom-right corner of the HUD.
+
+| Achievement | How to unlock |
+|---|---|
+| First Blood | Destroy your first alien |
+| Cloud Buster | Destroy 10 clouds in a single game |
+| Village Guardian | Reach score 1000 with all 12 houses intact |
+| Boss Slayer | Defeat your first boss swarm |
+| Nuke Em | Fire the nuclear weapon |
+| Centurion | Reach score 1000 |
+| Legendary | Reach score 2000 |
+| Night Owl | Earn an hourly bonus during the night phase |
+| Untouchable | Reach score 500 without any alien collision damage |
+
+## 💡 Ambient LED System
+
+The 7 ambient LEDs reflect game state in real-time with a 9-level priority system:
+
+| Priority | Condition | Effect |
+|---|---|---|
+| 1 | Game over | Hard red flash |
+| 2 | Nuke fired | White flash fading over 60 frames |
+| 3 | Ship hit | Orange fade over 15 frames |
+| 4 | Boss fight | Red wave sweeping across LEDs with per-LED sine flicker |
+| 5 | Explosion | Brief orange burst |
+| 6 | Hourly victory | Warm gold pulse |
+| 7 | Night | Independent starfield twinkle per LED |
+| 8 | Daytime | Score-based ambient glow — green (safe) to red (danger) with slow pulse |
+
 ## 🎮 How to Play
 1. Upload all `.py` files to the root directory of your Presto.
 2. Run `main.py` and launch `dandare.py`.
