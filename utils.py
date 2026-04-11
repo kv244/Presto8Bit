@@ -18,11 +18,11 @@ def get_bezier_point(t_int: int, p0: int, p1: int, p2: int) -> int:
 
 @micropython.viper
 def lorenz_step(x: float, y: float, z: float, s: float, r: float, b: float, dt: float):
-    \"\"\"
+    """
     Numerical integration for the Lorenz Attractor (Euler method).
     dx/dt = sigma*(y - x); dy/dt = x*(rho - z) - y; dz/dt = x*y - beta*z
     Used for erratic, butterfly-wing style enemy movement.
-    \"\"\"
+    """
     dx = s * (y - x)
     dy = x * (r - z) - y
     dz = x * y - b * z
@@ -30,11 +30,11 @@ def lorenz_step(x: float, y: float, z: float, s: float, r: float, b: float, dt: 
 
 @micropython.viper
 def rossler_step(x: float, y: float, z: float, a: float, b: float, c: float, dt: float):
-    \"\"\"
+    """
     Numerical integration for the Rössler Attractor (Euler method).
     dx/dt = -y - z; dy/dt = x + a*y; dz/dt = b + z*(x - c)
     Used for spiraling, folded-band style enemy movement.
-    \"\"\"
+    """
     dx = -y - z
     dy = x + a * y
     dz = b + z * (x - c)

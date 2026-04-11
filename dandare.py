@@ -370,7 +370,7 @@ class Game:
         )
 
     def spawn_boss_swarm(self):
-        \"\"\"Spawn 16 boss aliens in a perfect contracting ring centered at screenspace center.\"\"\"
+        """Spawn 16 boss aliens in a perfect contracting ring centered at screenspace center."""
         self.score += 500  # Extra life points for the boss fight
         self.ship.x = 160  # Center for visibility
         cx, cy = 160, 120
@@ -395,8 +395,6 @@ class Game:
                 move_speed=3.8,
                 hp=4,
                 a_type=0
-            )
-
             )
 
     def fire_laser(self, x, y, vx=12, vy=0, is_up=False):

@@ -16,6 +16,11 @@ Three new gameplay systems were added in this release:
 *   **Fractal Bullet Spreads:** All bullet patterns now use a golden-ratio (φ=0.618) self-similar angle tree, pre-computed at module load. The player's hero spread fires 7 projectiles, the standard spread fires 3-way, and enemy return fire also uses a 3-way fractal fan — all rotation-matrix aligned to the actual target direction.
 *   **Enemy Defection (Ally System):** Non-boss aliens have a 0.02%/frame chance to switch sides. A defected alien turns cyan, homes toward the nearest enemy, fires a 3-way fractal spread at it, and body-rams enemies for bonus score. Up to 6 allies can be active at once.
 
+### 🛠 Fixed Syntax Errors (2026-04-11)
+Resolved 54 syntax errors reported by GitHub Actions linter:
+*   **`dandare.py`**: Fixed docstring literal backslashes and removed an extra closing parenthesis that broke method parsing.
+*   **`utils.py`**: Fixed docstring literal backslashes in `@micropython.viper` decorated functions.
+
 ---
 
 ## 🌟 Game Features & Mechanics
