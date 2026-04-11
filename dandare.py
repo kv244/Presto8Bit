@@ -1,6 +1,39 @@
 # ICON joystick
 # NAME Dan Dare
 # DESC Parallax pilot of the future
+#
+# --- CHANGE LOG ---
+# v2  2026-04-11  Three new gameplay systems added:
+#
+#   1. GENETIC ALGORITHM (enemies)
+#      - New module: genetics.py  (gene pool, breed, record_fitness)
+#      - Each alien carries a 6-gene genome: speed, move_speed, hp,
+#        fire_rate_mul, proj_speed, spread_scale
+#      - On death the genome + fitness (survival_frames + direct_hits×100)
+#        is recorded in an 8-slot gene pool (tournament selection)
+#      - 60 % of new spawns are bred via single-point crossover + 20 % /
+#        gene mutation; first-generation aliens use random defaults
+#      - Integrated in: spawn_alien(), _update_collisions()
+#
+#   2. FRACTAL BULLET SPREADS (player + enemies)
+#      - Pre-computed golden-ratio (φ=0.618) angle trees at module load
+#      - Hero 7-way: depth-2 binary tree ≈ ±6.9°/±18°/±29.1° + centre
+#      - Standard 3-way / enemy 3-way: ±15° symmetric fractal subset
+#      - Cloud-eraser X offsets: same φ-tree scaled to ±45 px (was uniform)
+#      - All spreads use a 2-D rotation matrix so the pattern follows the
+#        tracked target direction rather than being axis-aligned
+#      - Integrated in: _handle_firing() hero/standard/enemy branches
+#
+#   3. ENEMY DEFECTION (ally system)
+#      - Non-boss enemies have a 0.02 % / frame chance to defect (≈ rare)
+#      - Defected alien: is_ally=True, drawn in cyan, max 6 concurrent
+#      - Allies home toward the nearest non-ally enemy alien each frame
+#      - Allies fire a 3-way fractal spread toward that enemy (new method
+#        _handle_ally_fire())
+#      - Ally body-collision with an enemy kills the enemy (+15 score)
+#      - Ally lasers (EnemyLaser.is_ally=True) are drawn in cyan and only
+#        damage non-ally aliens
+#      - Integrated in: _update_collisions(), _handle_ally_fire(), draw()
 
 from presto import Presto, Buzzer
 from machine import Pin
@@ -28,6 +61,10 @@ gc.collect()
 print(f"   [RAM] {gc.mem_free()} bytes free.")
 from entities import ALIEN_POOL, LASER_POOL, PARTICLE_POOL, ENEMY_LASER_POOL
 print("   [OK] Entities loaded.")
+print("-> Loading genetics...")
+gc.collect()
+import genetics as _genetics
+print("   [OK] Genetics loaded.")
 print("-> Loading environment...")
 gc.collect()
 print(f"   [RAM] {gc.mem_free()} bytes free.")
@@ -39,6 +76,57 @@ print(f"   [RAM] {gc.mem_free()} bytes free.")
 from ship import Ship
 print("   [OK] Ship loaded.")
 print("Local modules reloaded.")
+
+# ---------------------------------------------------------------------------
+# Fractal bullet-spread geometry — golden-ratio (φ=0.618) self-similar subdivision
+# Each spread is a depth-2 binary tree: outer=base×(1+φ), mid=base, inner=base×(1-φ)
+# Pre-computed as (cos, sin) tuples so no trig during gameplay.
+# ---------------------------------------------------------------------------
+_FS  = 18.0   # base angular spread in degrees (tune here to adjust fan width)
+_FX  = 28     # base X-offset for cloud fire (pixels)
+_PHI = 0.618  # golden ratio
+
+def _fa(deg):
+    import math as _m
+    r = deg * _m.pi / 180.0
+    return (_m.cos(r), _m.sin(r))
+
+# Hero 7-way spread (depth-2 binary tree, angles in degrees from horizontal):
+#   ≈ (-29.1°, -18°, -6.9°, 0°, +6.9°, +18°, +29.1°)
+_HERO_SPREAD = (
+    _fa(-_FS * (1 + _PHI)),
+    _fa(-_FS),
+    _fa(-_FS * (1 - _PHI)),
+    _fa(0.0),
+    _fa( _FS * (1 - _PHI)),
+    _fa( _FS),
+    _fa( _FS * (1 + _PHI)),
+)
+
+# 3-way spread used by: enemy fire, ally fire, standard player mode danger
+_ENEMY_SPREAD = (_fa(-15.0), _fa(0.0), _fa(15.0))
+
+# Single centre shot — standard player mode when not in danger
+_STD_SINGLE = (_fa(0.0),)
+
+# Cloud-eraser X offsets (hero 7-way, level-2 fractal spacing, ±45 outer):
+#   -45, -28, -10, 0, +10, +28, +45
+_CLOUD_OFFSETS = (
+    -int(_FX * (1 + _PHI)),
+    -_FX,
+    -int(_FX * (1 - _PHI)),
+    0,
+    int(_FX * (1 - _PHI)),
+    _FX,
+    int(_FX * (1 + _PHI)),
+)
+
+# Cloud-eraser X offsets (standard 3-way, level-1 nodes only):
+#   -28, 0, +28
+_CLOUD_OFFSETS_3 = (-_FX, 0, _FX)
+
+del _fa, _PHI, _FS, _FX
+gc.collect()
 
 # ---------------------------------------------------------------------------
 # Rain is simple enough to stay as pre-allocated plain lists.
@@ -74,7 +162,7 @@ class Game:
                  'pen_alien_glow', 'pen_halo', 'pen_black', 'pen_boss_border',
                  'pen_boss_hud', 'pen_boss_shadow', 'pen_boss_alien_body',
                  'pen_boss_alien_glow', 'pen_enemy_laser', 'pen_night_dim', 'high_score',
-                 '_gc_countdown', '_cloud_eraser_offsets',
+                 '_gc_countdown', 'pen_ally_body', 'pen_ally_glow',
                  '_score_str', '_hi_str', '_last_score_drawn', '_last_hi_drawn', 'in_intro',
                  'achievements', 'ach_notify_timer', 'ach_notify_text', 'pen_ach',
                  '_aliens_killed', '_clouds_destroyed', '_untouchable',
@@ -141,7 +229,9 @@ class Game:
         self.ach_notify_text = ''
         self.pen_ach = d.create_pen(255, 215, 0)  # gold notification text
 
-        self._cloud_eraser_offsets = [-45, -30, -15, 0, 15, 30, 45]
+        # Ally pens — cyan tones distinguish defected aliens from enemies
+        self.pen_ally_body = d.create_pen(0, 210, 220)
+        self.pen_ally_glow = d.create_pen(80, 255, 255)
         
         # Cache HUD strings to avoid per-frame heap churn
         self._score_str = ""
@@ -163,6 +253,7 @@ class Game:
         LASER_POOL.clear()
         ENEMY_LASER_POOL.clear()
         PARTICLE_POOL.clear()
+        _genetics.reset_pool()
         for i in range(_RAIN_MAX): _rain_live[i] = False
 
         self.env  = Environment(self.display)
@@ -220,19 +311,48 @@ class Game:
         tx = -50 if random.random() > 0.3 else 370
         is_seeker = self.ship if random.random() > 0.85 else None
 
-        # Elite alien chance: 15% chance to have 2HP (drawn in red like a mini-boss)
+        # Elite alien chance: 15% chance (drawn in red like a mini-boss)
         is_elite = random.random() > 0.85
         # 50% of elites that aren't already seekers become seekers — they hunt the ship
         if is_elite and is_seeker is None and random.random() > 0.5:
             is_seeker = self.ship
+
+        # Genetic algorithm — breed() writes a child genome into a.genome in-place.
+        # Returns True if the gene pool had ≥2 parents, False on first generation.
+        bred = _genetics.breed(a.genome)
+        if bred:
+            spd       = a.genome[0]
+            move_spd  = a.genome[1]
+            hp_val    = max(1, int(a.genome[2]))
+            fire_mul  = a.genome[3]
+            proj_spd  = a.genome[4]
+            spr_scale = a.genome[5]
+            if is_elite:
+                hp_val = max(2, hp_val)
+        else:
+            # First-generation defaults with random speed variation
+            spd = float(random.randint(2, 5))
+            move_spd  = 1.8
+            hp_val    = 2 if is_elite else 1
+            fire_mul  = 1.0
+            proj_spd  = 10.0
+            spr_scale = 1.0
+            # Mirror defaults into genome so fitness can be recorded on death
+            a.genome[0] = spd;  a.genome[1] = move_spd; a.genome[2] = float(hp_val)
+            a.genome[3] = fire_mul; a.genome[4] = proj_spd; a.genome[5] = spr_scale
+
         a.reset(
             340, sy,
             random.randint(0, 320), random.randint(0, 240),
             tx, sy + random.randint(-80, 80),
-            random.randint(2, 5),
+            spd,
             is_seeker,
             is_boss=is_elite,
-            hp=2 if is_elite else 1
+            move_speed=move_spd,
+            hp=hp_val,
+            fire_rate_mul=fire_mul,
+            proj_speed=proj_spd,
+            spread_scale=spr_scale,
         )
 
     def spawn_boss_swarm(self):
@@ -457,28 +577,27 @@ class Game:
                 sx, sy = ship_x, ship_y
                 if firing_up:
                     cx, cy = env.get_celestial_coords(self.t)
-                    for offset in self._cloud_eraser_offsets:
-                        self.fire_laser(sx + offset, sy - 10, vx=0, vy=-12, is_up=True)
+                    # Hero 7-way cloud fire — fractal golden-ratio X offsets
+                    for xi in _CLOUD_OFFSETS:
+                        self.fire_laser(sx + xi, sy - 10, vx=0, vy=-12, is_up=True)
                     if danger:
                         vx = float(cx - sx) * -12.0 / (cy - sy) if cy != sy else 0
                         self.fire_laser(sx, sy - 10, vx=vx, vy=-12, is_up=True)
                 else:
                     dv = (random.random() - 0.5) * miss_factor
-                    # Centre laser tracks nearest alien with angular ballistics;
-                    # the surrounding 6 keep the wide spread for area coverage.
+                    # Compute base fire direction — track nearest alien, clamp to ±60°
                     cvx, cvy = 14.0, dv
                     if target_a:
                         tdx = target_a.x - ship_x; tdy = target_a.y - ship_y
                         ca = math.atan2(tdy, tdx)
-                        ca = max(-1.0472, min(1.0472, ca))  # clamp to ±60°
+                        ca = max(-1.0472, min(1.0472, ca))
                         cvx = 14.0 * math.cos(ca); cvy = 14.0 * math.sin(ca)
-                    self.fire_laser(sx + 10, sy,      vx=cvx, vy=cvy)
-                    self.fire_laser(sx + 5,  sy - 12, vx=13, vy=dv-1)
-                    self.fire_laser(sx + 5,  sy + 12, vx=13, vy=dv+1)
-                    self.fire_laser(sx,      sy - 24, vx=12, vy=dv-2)
-                    self.fire_laser(sx,      sy + 24, vx=12, vy=dv+2)
-                    self.fire_laser(sx - 5,  sy - 36, vx=11, vy=dv-3)
-                    self.fire_laser(sx - 5,  sy + 36, vx=11, vy=dv+3)
+                    # Hero 7-way fractal spread — rotate base direction by each
+                    # pre-computed golden-ratio angle (depth-2 binary tree)
+                    for cs in _HERO_SPREAD:
+                        rvx = cs[0] * cvx - cs[1] * cvy
+                        rvy = cs[1] * cvx + cs[0] * cvy
+                        self.fire_laser(sx + 10, sy, vx=rvx, vy=rvy)
                 ship.recoil = 5
                 ship.fire_cooldown = 2 if not firing_up else 3
                 buzzer.set_tone(1800)
@@ -497,45 +616,94 @@ class Game:
                 dv = (random.random() - 0.5) * miss_factor
                 if firing_up:
                     sx, sy = ship_x, ship_y
-                    self.fire_laser(sx,      sy - 10, vx=0, vy=-12, is_up=True)
-                    self.fire_laser(sx - 15, sy - 5,  vx=0, vy=-12, is_up=True)
-                    self.fire_laser(sx + 15, sy - 5,  vx=0, vy=-12, is_up=True)
+                    # Standard 3-way cloud fire — fractal level-1 X offsets (-28, 0, +28)
+                    for xi in _CLOUD_OFFSETS_3:
+                        self.fire_laser(sx + xi, sy - 10, vx=0, vy=-12, is_up=True)
                     if danger:
                         cx, cy = env.get_celestial_coords(self.t)
-                        vx = float(cx - sx) * -12.0 / (cy - sy) if cy != sy else 0
-                        self.fire_laser(sx, sy - 10, vx=vx, vy=-12, is_up=True)
+                        vxd = float(cx - sx) * -12.0 / (cy - sy) if cy != sy else 0
+                        self.fire_laser(sx, sy - 10, vx=vxd, vy=-12, is_up=True)
                 else:
-                    vx, vy = 12, dv
+                    vx0 = 12.0; vy0 = dv
                     if target_a:
-                        dx = target_a.x - ship_x; dy = target_a.y - ship_y
-                        angle = math.atan2(dy, dx)
-                        limit = 60 * math.pi / 180
+                        tdx = target_a.x - ship_x; tdy = target_a.y - ship_y
+                        angle = math.atan2(tdy, tdx)
+                        limit = 1.0472
                         angle = max(-limit, min(limit, angle))
-                        vx = 12 * math.cos(angle); vy = 12 * math.sin(angle)
-                    self.fire_laser(ship_x + 10, ship_y, vx=vx, vy=vy)
-                    if is_danger:
-                        self.fire_laser(ship_x, ship_y - 15, vx=vx, vy=vy)
-                        self.fire_laser(ship_x, ship_y + 15, vx=vx, vy=vy)
+                        vx0 = 12.0 * math.cos(angle); vy0 = 12.0 * math.sin(angle)
+                    # 3-way fractal spread in danger, single centre shot otherwise
+                    spread = _ENEMY_SPREAD if is_danger else _STD_SINGLE
+                    for cs in spread:
+                        rvx = cs[0] * vx0 - cs[1] * vy0
+                        rvy = cs[1] * vx0 + cs[0] * vy0
+                        self.fire_laser(ship_x + 10, ship_y, vx=rvx, vy=rvy)
                 ship.recoil = 5
                 buzzer.set_tone(1500 if is_danger else 1200)
             else:
                 self._set_ambient_tone()
 
-        # Alien return fire
+        # Alien return fire — enemies only; allies fire via _handle_ally_fire()
+        # Each non-boss fires a 3-way fractal spread toward the ship;
+        # bosses keep single aimed shots to limit pool pressure.
         for a in ALIEN_POOL.active_objects():
+            if a.is_ally: continue
             prob = 0.12 if a.is_boss else 0.005
+            prob = prob * a.fire_rate_mul          # genetic trait modulates rate
             if a.target:
                 dx = a.x - ship_x; dy = a.y - ship_y
-                prob *= 3.0 if dx*dx + dy*dy < 22500 else 1.5
+                prob = prob * (3.0 if dx*dx + dy*dy < 22500 else 1.5)
             if random.random() < prob:
-                el = ENEMY_LASER_POOL.get()
-                if el is not None:
-                    el.reset(int(a.x) - 8, int(a.y))
+                if a.is_boss:
+                    el = ENEMY_LASER_POOL.get()
+                    if el is not None:
+                        el.reset(int(a.x) - 8, int(a.y),
+                                 vx=-a.proj_speed, vy=0, is_ally=False)
+                else:
+                    # 3-way fractal spread — rotate toward-ship vector by fractal angles
+                    tdx = ship_x - a.x; tdy = ship_y - a.y
+                    if tdx*tdx + tdy*tdy > 1.0:
+                        fa  = math.atan2(tdy, tdx)
+                        cfa = math.cos(fa); sfa = math.sin(fa)
+                        spd = a.proj_speed
+                        for cs in _ENEMY_SPREAD:
+                            rvx = spd * (cs[0] * cfa - cs[1] * sfa)
+                            rvy = spd * (cs[0] * sfa + cs[1] * cfa)
+                            el  = ENEMY_LASER_POOL.get()
+                            if el is not None:
+                                el.reset(int(a.x), int(a.y),
+                                         vx=rvx, vy=rvy, is_ally=False)
 
     # -----------------------------------------------------------------------
-    @micropython.native
-    def _update_collisions(self, ship_x, ship_y, alien_pool, laser_pool, enemy_laser_pool, env, t):
-        """Rain, enemy laser, player laser, and alien collision resolution."""
+    def _handle_ally_fire(self):
+        """Allies fire a 3-way fractal spread toward their current nearest enemy."""
+        for a in ALIEN_POOL.active_objects():
+            if not a.is_ally: continue
+            if a.target is None: continue
+            if random.random() > 0.12 * a.fire_rate_mul: continue
+            ax = a.x; ay = a.y
+            tdx = a.target.x - ax; tdy = a.target.y - ay
+            dist2 = tdx*tdx + tdy*tdy
+            if dist2 < 1.0: continue
+            fa  = math.atan2(tdy, tdx)
+            cfa = math.cos(fa); sfa = math.sin(fa)
+            spd = a.proj_speed
+            for cs in _ENEMY_SPREAD:
+                rvx = spd * (cs[0] * cfa - cs[1] * sfa)
+                rvy = spd * (cs[0] * sfa + cs[1] * cfa)
+                el  = ENEMY_LASER_POOL.get()
+                if el is not None:
+                    el.reset(int(ax), int(ay), vx=rvx, vy=rvy, is_ally=True)
+
+    # -----------------------------------------------------------------------
+    # v2 (2026-04-11): removed @micropython.native to support ally branching,
+    # genetics fitness recording, and defection logic.
+    def _update_collisions(self, ship_x, ship_y, alien_pool, laser_pool,
+                           enemy_laser_pool, env, t, near_a=None):
+        """Rain, enemy laser, player laser, and alien collision resolution.
+
+        near_a — nearest non-ally enemy alien (passed from update()).
+        Used to credit direct_hits when an enemy laser reaches the ship.
+        """
         # ---- Rain ----
         for i in range(_RAIN_MAX):
             if _rain_live[i]:
@@ -554,20 +722,38 @@ class Game:
                     self.spawn_particles(_rain_x[i], 240, random.randint(2, 4), is_water=True)
                     _rain_live[i] = False
 
-        # ---- Enemy lasers ----
+        # ---- Enemy and ally lasers ----
         for el in enemy_laser_pool:
             if not el.active: continue
             el.update()
             if not el.active: continue
-            dx = el.x - ship_x; dy = el.y - ship_y
-            if dx*dx + dy*dy < 225:
-                self.score = max(0, self.score - max(5, self.score // 10))
-                self.impact_timer = 10
-                self.spawn_particles(ship_x, ship_y, 6)
-                el.active = False
-                if self.score <= 0:
-                    self.game_over = True; self.pause_timer = 150
-                    self._music.play(_music.GAME_OVER)
+            if el.is_ally:
+                # Ally laser — hits non-ally enemies only
+                for a in alien_pool:
+                    if not a.active or a.is_ally: continue
+                    dx = el.x - a.x; dy = el.y - a.y
+                    if dx*dx + dy*dy < 144:
+                        a.hp -= 1
+                        if a.hp <= 0:
+                            _genetics.record_fitness(a.genome, a.survival_frames, a.direct_hits)
+                            self.score += 15
+                            a.active = False
+                            self.spawn_particles(a.x, a.y, 8)
+                        el.active = False; break
+            else:
+                # Enemy laser — hits ship
+                dx = el.x - ship_x; dy = el.y - ship_y
+                if dx*dx + dy*dy < 225:
+                    self.score = max(0, self.score - max(5, self.score // 10))
+                    self.impact_timer = 10
+                    self.spawn_particles(ship_x, ship_y, 6)
+                    el.active = False
+                    # Approximate damage credit to the nearest active enemy alien
+                    if near_a is not None and not near_a.is_ally:
+                        near_a.direct_hits = near_a.direct_hits + 1
+                    if self.score <= 0:
+                        self.game_over = True; self.pause_timer = 150
+                        self._music.play(_music.GAME_OVER)
 
         # ---- Player lasers ----
         for l in laser_pool:
@@ -596,12 +782,14 @@ class Game:
                         l.active = False; continue
             for a in alien_pool:
                 if not a.active: continue
+                if a.is_ally: continue  # allies are never hit by player lasers
                 dx = lx - a.x; dy = ly - a.y
                 if dx*dx + dy*dy < 144:
                     self.score += 10; self.explode_timer = 5
                     self.spawn_particles(a.x, a.y, 8)
                     a.hp -= 1
                     if a.hp <= 0:
+                        _genetics.record_fitness(a.genome, a.survival_frames, a.direct_hits)
                         self.score += 20 if a.is_boss else 10
                         a.active = False
                         self._aliens_killed += 1
@@ -609,14 +797,61 @@ class Game:
                             self._unlock_ach('first_blood')
                     l.active = False; break
 
-        # ---- Alien movement + ship collision ----
+        # ---- Alien movement + defection + collision ----
+        # Count current allies so we can cap defection at 6 concurrent allies.
+        ally_count = 0
+        for x in alien_pool:
+            if x.active and x.is_ally:
+                ally_count += 1
+
         for a in alien_pool:
             if not a.active: continue
+
+            # Defection: non-boss enemy may randomly switch sides (~0.4 % per second)
+            if not a.is_ally and not a.is_boss and ally_count < 6:
+                if random.random() < 0.0002:
+                    a.is_ally  = True
+                    a.target   = None   # retargeted each frame below
+                    ally_count += 1
+
+            # Ally: retarget to nearest non-ally enemy each frame for homing
+            if a.is_ally:
+                a.target = None
+                best_d2  = 999999.0
+                for b in alien_pool:
+                    if b.active and not b.is_ally:
+                        dx2 = b.x - a.x; dy2 = b.y - a.y
+                        d2  = dx2*dx2 + dy2*dy2
+                        if d2 < best_d2:
+                            best_d2 = d2; a.target = b
+
             a.update()
-            if not a.active: continue
+            if not a.active:
+                # Alien timed-out naturally — record fitness for non-allies
+                if not a.is_ally:
+                    _genetics.record_fitness(a.genome, a.survival_frames, a.direct_hits)
+                continue
+
+            if a.is_ally:
+                # Ally body-collision with an enemy alien — ram attack
+                if a.target is not None:
+                    dx = a.x - a.target.x; dy = a.y - a.target.y
+                    if dx*dx + dy*dy < 100:
+                        _genetics.record_fitness(a.target.genome,
+                                                 a.target.survival_frames,
+                                                 a.target.direct_hits)
+                        self.score += 15
+                        self.spawn_particles(a.target.x, a.target.y, 8)
+                        a.target.active = False
+                        a.active        = False   # ally consumed in collision
+                continue   # allies never collide with the ship
+
+            # Non-ally: ship collision
             dx = ship_x - a.x; dy = ship_y - a.y
             if dx*dx + dy*dy < 100:
                 self.score -= 150 if self.boss_active else 50
+                a.direct_hits += 1   # body-slam counts as damage dealt
+                _genetics.record_fitness(a.genome, a.survival_frames, a.direct_hits)
                 self._untouchable = False; self.impact_timer = 15
                 self.spawn_particles(ship_x, ship_y, 20)
                 a.active = False
@@ -679,10 +914,12 @@ class Game:
         joypad_active, jp_fire, jp_super = self._handle_input(t, danger, trouble)
         ship_x, ship_y = self.ship_vx, self.ship_vy
 
-        # Count aliens + find nearest in one pass (used by autopilot and firing)
+        # Count active enemy aliens + find nearest non-ally for targeting.
+        # Allies are excluded from alien_count and near_a so they don't
+        # inflate horde thresholds or attract the player's auto-aim.
         alien_count = 0; near_a = None; min_d2 = 999999.0
         for a in alien_pool:
-            if a.active:
+            if a.active and not a.is_ally:
                 alien_count += 1
                 dx = a.x - ship_x; dy = a.y - ship_y
                 d2 = dx*dx + dy*dy
@@ -692,7 +929,8 @@ class Game:
         self._update_autopilot(joypad_active, danger, trouble, is_horde, ship_x, ship_y, near_a)
         self._handle_spawning(alien_pool)
         self._handle_firing(ship_x, ship_y, alien_count, is_horde, joypad_active, jp_fire, jp_super, danger, near_a)
-        self._update_collisions(ship_x, ship_y, alien_pool, laser_pool, enemy_laser_pool, self.env, t)
+        self._handle_ally_fire()
+        self._update_collisions(ship_x, ship_y, alien_pool, laser_pool, enemy_laser_pool, self.env, t, near_a)
 
         for p in PARTICLE_POOL._pool:
             if p.active: p.update()
@@ -826,20 +1064,22 @@ class Game:
             if l.active:
                 l.draw(d, self.pen_up_laser if l.is_up else self.pen_laser)
 
-        # Enemy lasers
+        # Enemy/ally lasers — ally shots drawn in cyan to distinguish them
         for el in ENEMY_LASER_POOL._pool:
             if el.active:
-                el.draw(d, self.pen_enemy_laser)
+                el.draw(d, self.pen_ally_glow if el.is_ally else self.pen_enemy_laser)
 
         # Particles
         for p in PARTICLE_POOL._pool:
             if p.active:
                 p.draw(d, self.pen_particle, self.pen_water)
 
-        # Aliens (boss aliens drawn in red)
+        # Aliens: allies cyan, bosses red, normals green
         for a in ALIEN_POOL._pool:
             if a.active:
-                if a.is_boss:
+                if a.is_ally:
+                    a.draw(d, self.pen_ally_body,       self.pen_ally_glow)
+                elif a.is_boss:
                     a.draw(d, self.pen_boss_alien_body, self.pen_boss_alien_glow)
                 else:
                     a.draw(d, self.pen_alien_body,      self.pen_alien_glow)

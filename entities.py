@@ -1,6 +1,18 @@
 import random, math
 from utils import get_bezier_point
 
+# --- CHANGE LOG ---
+# v2  2026-04-11  Structural additions for genetic algorithm + ally system:
+#   - Alien: 9 new __slots__ — genome (6-float list), survival_frames,
+#     direct_hits, fire_rate_mul, proj_speed, spread_scale, is_ally, ox, oy
+#     ox/oy fixed at 0 so allied Aliens can be used as homing targets
+#     (Alien.update reads target.ox / target.oy, same interface as Ship)
+#   - Alien.reset(): accepts fire_rate_mul, proj_speed, spread_scale params
+#   - Alien.update(): increments survival_frames every active frame
+#   - EnemyLaser: new is_ally slot + reset() param; ally lasers target
+#     enemy aliens rather than the ship
+#   - ENEMY_LASER_POOL: 20 → 32 to handle 3-way fractal ally/enemy fire
+
 ALIEN_SPRITE = [
     "    ########       ",
     "   ##########      ",
@@ -37,7 +49,15 @@ import gc; gc.collect()
 
 class Alien:
     __slots__ = ('p0x', 'p0y', 'p1x', 'p1y', 'p2x', 'p2y', 't', 'speed', 'active', 'x', 'y', 'target',
-                 'is_boss', 'move_speed', 'hp')
+                 'is_boss', 'move_speed', 'hp',
+                 # Genetic algorithm traits (pre-allocated per pool slot)
+                 'genome', 'survival_frames', 'direct_hits',
+                 'fire_rate_mul', 'proj_speed', 'spread_scale',
+                 # Ally system
+                 'is_ally',
+                 # ox/oy always 0 — lets allies use other Aliens as homing targets
+                 # (Alien.update reads target.ox / target.oy, same interface as Ship)
+                 'ox', 'oy')
 
     def __init__(self):
         self.active = False
@@ -48,8 +68,20 @@ class Alien:
         self.is_boss = False
         self.move_speed = 1.8
         self.hp = 1
+        # Genetics — 6-element list allocated once per pool slot, mutated by breed()
+        self.genome         = [3.0, 1.8, 1.0, 1.0, 10.0, 1.0]
+        self.survival_frames = 0
+        self.direct_hits    = 0
+        self.fire_rate_mul  = 1.0
+        self.proj_speed     = 10.0
+        self.spread_scale   = 1.0
+        # Ally flag
+        self.is_ally = False
+        # Always zero — satisfies target.ox / target.oy reads in Alien.update()
+        self.ox = 0; self.oy = 0
 
-    def reset(self, p0x, p0y, p1x, p1y, p2x, p2y, speed, target=None, is_boss=False, move_speed=1.8, hp=1):
+    def reset(self, p0x, p0y, p1x, p1y, p2x, p2y, speed, target=None, is_boss=False, move_speed=1.8, hp=1,
+              fire_rate_mul=1.0, proj_speed=10.0, spread_scale=1.0):
         self.p0x = p0x; self.p0y = p0y; self.p1x = p1x; self.p1y = p1y; self.p2x = p2x; self.p2y = p2y
         self.t = 0; self.speed = speed
         self.x = float(p0x); self.y = float(p0y)
@@ -58,9 +90,16 @@ class Alien:
         self.move_speed = move_speed
         self.active = True
         self.hp = hp
+        self.fire_rate_mul  = fire_rate_mul
+        self.proj_speed     = proj_speed
+        self.spread_scale   = spread_scale
+        self.survival_frames = 0
+        self.direct_hits    = 0
+        self.is_ally        = False   # defection never carries over across respawns
 
     @micropython.native
     def update(self):
+        self.survival_frames = self.survival_frames + 1
         t = self.t + self.speed
         self.t = t
         target = self.target
@@ -126,16 +165,17 @@ class Laser:
 
 
 class EnemyLaser:
-    """Alien projectile — travels leftward toward the ship."""
-    __slots__ = ('x', 'y', 'vx', 'vy', 'active')
+    """Alien projectile — enemy fire toward the ship, or ally fire toward enemies."""
+    __slots__ = ('x', 'y', 'vx', 'vy', 'active', 'is_ally')
 
     def __init__(self):
         self.active = False
         self.x = 0; self.y = 0; self.vy = 0
+        self.is_ally = False
 
-    def reset(self, x, y, vx=-10, vy=0):
+    def reset(self, x, y, vx=-10, vy=0, is_ally=False):
         self.x = x; self.y = y; self.vx = vx; self.vy = vy
-        self.active = True
+        self.active = True; self.is_ally = is_ally
 
     @micropython.native
     def update(self):
@@ -223,5 +263,5 @@ class Pool:
 ALIEN_POOL        = Pool(Alien,        24) # 30 -> 24
 LASER_POOL        = Pool(Laser,        64) # Increased for 7-way Super Fire spread
 PARTICLE_POOL     = Pool(Particle,     80) # 120 -> 80 (Large RAM saving)
-ENEMY_LASER_POOL  = Pool(EnemyLaser,   20)
+ENEMY_LASER_POOL  = Pool(EnemyLaser,   32)  # 20→32: ally 3-way fractal fire needs headroom
 gc.collect()
