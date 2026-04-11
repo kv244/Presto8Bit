@@ -16,7 +16,7 @@ def get_bezier_point(t_int: int, p0: int, p1: int, p2: int) -> int:
     # Optimized to avoid intermediate large integers
     return (inv_t * inv_t * p0 + 2 * inv_t * t_int * p1 + t_int * t_int * p2) >> 16
 
-@micropython.viper
+@micropython.native
 def lorenz_step(x: float, y: float, z: float, s: float, r: float, b: float, dt: float):
     """
     Numerical integration for the Lorenz Attractor (Euler method).
@@ -28,7 +28,7 @@ def lorenz_step(x: float, y: float, z: float, s: float, r: float, b: float, dt: 
     dz = x * y - b * z
     return x + dx * dt, y + dy * dt, z + dz * dt
 
-@micropython.viper
+@micropython.native
 def rossler_step(x: float, y: float, z: float, a: float, b: float, c: float, dt: float):
     """
     Numerical integration for the Rössler Attractor (Euler method).
