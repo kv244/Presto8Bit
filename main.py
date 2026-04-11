@@ -229,7 +229,7 @@ class Application:
         machine.reset()
 
 
-icons = [
+applications = [
     Application(60, 60, file) for file in os.listdir()
     if file.endswith(".py") and file not in ("sdcard_check.py", "sdcard_explore.py", "main.py", "secrets.py", "entities.py", "environment.py", "ship.py", "utils.py")]
 
@@ -291,12 +291,12 @@ while True:
     move *= friction           # Apply friction, this will slowly decrease "move" when there's no touch, to slow the spin down
 
     # Pre-calculate the scales and angles for sorting.
-    for icon in icons:
+    for icon in applications:
         icon.update(move_angle)
 
     # We have implemented the __lt__ magic method on Icons so we can just sort them
     # by visual size- the biggest icon is at the front!
-    sorted_icons = sorted(icons)
+    sorted_icons = sorted(applications)
 
     # Draw all but the front-most icon
     for icon in sorted_icons[:-1]:

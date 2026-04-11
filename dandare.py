@@ -39,9 +39,6 @@ from presto import Presto, Buzzer
 from machine import Pin
 import time, random, gc, micropython, math, sys
 
-import gc
-gc.collect()
-
 # Force reload of local modules on soft-reboot to pick up disk changes
 for mod in ['utils', 'entities', 'environment', 'ship']:
     if mod in sys.modules:

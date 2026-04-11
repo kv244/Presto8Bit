@@ -1,4 +1,4 @@
-import micropython, math
+import micropython
 
 @micropython.asm_thumb
 def asm_lerp_unit(r0, r1, r2): 
