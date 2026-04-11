@@ -65,6 +65,8 @@ print("-> Loading genetics...")
 gc.collect()
 import genetics as _genetics
 print("   [OK] Genetics loaded.")
+import chaos as _chaos
+print("   [OK] Chaos theory loaded.")
 print("-> Loading environment...")
 gc.collect()
 print(f"   [RAM] {gc.mem_free()} bytes free.")
@@ -166,7 +168,7 @@ class Game:
                  '_score_str', '_hi_str', '_last_score_drawn', '_last_hi_drawn', 'in_intro',
                  'achievements', 'ach_notify_timer', 'ach_notify_text', 'pen_ach',
                  '_aliens_killed', '_clouds_destroyed', '_untouchable',
-                 '_music')
+                 '_music', 'chaos_twins', 'chaos_tracker', '_lambda_str', 'chaos_wave_active')
 
     def __init__(self, presto=None):
         # 1. Hardware & Engine Setup (persistent)
@@ -233,6 +235,12 @@ class Game:
         self.pen_ally_body = d.create_pen(0, 210, 220)
         self.pen_ally_glow = d.create_pen(80, 255, 255)
         
+        # Chaos Logic
+        self.chaos_twins = (None, None)
+        self.chaos_tracker = _chaos.LyapunovTracker("Chaos Wave")
+        self._lambda_str = ""
+        self.chaos_wave_active = False
+
         # Cache HUD strings to avoid per-frame heap churn
         self._score_str = ""
         self._hi_str    = ""
@@ -242,6 +250,7 @@ class Game:
         self.in_intro = True
         self.reset()
         self._music.play(_music.INTRO, loop=True)
+
 
     def reset(self):
         if hasattr(self, '_music'):
@@ -288,6 +297,10 @@ class Game:
         self._clouds_destroyed = 0
         self._untouchable = True
         self.ach_notify_timer = 0
+        # Chaos reset
+        self.chaos_twins = (None, None)
+        self.chaos_wave_active = False
+        self._lambda_str = ""
 
     # -----------------------------------------------------------------------
     def _unlock_ach(self, key):
@@ -353,10 +366,11 @@ class Game:
             fire_rate_mul=fire_mul,
             proj_speed=proj_spd,
             spread_scale=spr_scale,
+            a_type=0
         )
 
     def spawn_boss_swarm(self):
-        """Spawn 16 boss aliens in a perfect contracting ring centered at screenspace center."""
+        \"\"\"Spawn 16 boss aliens in a perfect contracting ring centered at screenspace center.\"\"\"
         self.score += 500  # Extra life points for the boss fight
         self.ship.x = 160  # Center for visibility
         cx, cy = 160, 120
@@ -379,7 +393,10 @@ class Game:
                 target=self.ship,
                 is_boss=True,
                 move_speed=3.8,
-                hp=4
+                hp=4,
+                a_type=0
+            )
+
             )
 
     def fire_laser(self, x, y, vx=12, vy=0, is_up=False):
@@ -496,10 +513,32 @@ class Game:
         ship.x = max(20, min(300, ship.x))
         ship.y = max(40, min(200, ship.y))
 
-    # -----------------------------------------------------------------------
     def _handle_spawning(self, alien_pool):
         """Alien/rain spawning and boss fight lifecycle."""
         if not self.boss_active:
+            # Chaos Wave Trigger: every 400 points
+            if self.score > 0 and self.score % 400 == 0 and not self.chaos_wave_active:
+                self.chaos_wave_active = True
+                # Alternates between Lorenz (1) and Rossler (2)
+                a_type = 1 if (self.score // 400) % 2 == 1 else 2
+                label = "Lorenz Wave" if a_type == 1 else "Rossler Wave"
+                self.chaos_tracker = _chaos.LyapunovTracker(label)
+                a1, a2 = _chaos.spawn_chaos_twins(ALIEN_POOL, a_type, 160, 120)
+                if a1:
+                    self.chaos_twins = (a1, a2)
+                    self.chaos_tracker.start(a1, a2)
+
+            if self.chaos_wave_active:
+                # Check if chaotic aliens are still around
+                still_chaos = False
+                for a in alien_pool:
+                    if a.active and a.a_type > 0:
+                        still_chaos = True; break
+                if not still_chaos:
+                    self.chaos_wave_active = False
+                    self.chaos_twins = (None, None)
+                    self._lambda_str = ""
+
             threshold = max(0.70, 0.94 - ((self.score - 300) * 0.0004)) if self.score > 300 else 0.94
             if random.random() > threshold:
                 self.spawn_alien()
@@ -928,6 +967,20 @@ class Game:
 
         self._update_autopilot(joypad_active, danger, trouble, is_horde, ship_x, ship_y, near_a)
         self._handle_spawning(alien_pool)
+        
+        # Lyapunov / Chaos Tracking
+        if self.chaos_wave_active and self.chaos_twins[0]:
+            l_val = self.chaos_tracker.update(self.chaos_twins[0], self.chaos_twins[1])
+            if l_val is not None:
+                self._lambda_str = f"LAMBDA: {l_val:.3f}"
+                if t % 60 == 0: self.chaos_tracker.log_result(l_val)
+        
+        # Chaos Trails
+        for a in alien_pool:
+            if a.active and a.a_type > 0 and t % 3 == 0:
+                p = PARTICLE_POOL.get()
+                if p: p.reset(a.x, a.y, False)
+        
         self._handle_firing(ship_x, ship_y, alien_count, is_horde, joypad_active, jp_fire, jp_super, danger, near_a)
         self._handle_ally_fire()
         self._update_collisions(ship_x, ship_y, alien_pool, laser_pool, enemy_laser_pool, self.env, t, near_a)
@@ -1096,6 +1149,9 @@ class Game:
             
         self.draw_hud(self._score_str, 5, 5, 2)
         self.draw_hud(self._hi_str, 240, 5, 2)
+        
+        if self.chaos_wave_active and self._lambda_str:
+            self.draw_hud(self._lambda_str, 5, 25, 1)
 
         if self.boss_active or self.boss_defeat_timer > 0:
             self._draw_boss_overlay(d)

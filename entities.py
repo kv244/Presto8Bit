@@ -1,51 +1,12 @@
 import random, math
-from utils import get_bezier_point
+from utils import get_bezier_point, lorenz_step, rossler_step
 
 # --- CHANGE LOG ---
-# v2  2026-04-11  Structural additions for genetic algorithm + ally system:
-#   - Alien: 9 new __slots__ — genome (6-float list), survival_frames,
-#     direct_hits, fire_rate_mul, proj_speed, spread_scale, is_ally, ox, oy
-#     ox/oy fixed at 0 so allied Aliens can be used as homing targets
-#     (Alien.update reads target.ox / target.oy, same interface as Ship)
-#   - Alien.reset(): accepts fire_rate_mul, proj_speed, spread_scale params
-#   - Alien.update(): increments survival_frames every active frame
-#   - EnemyLaser: new is_ally slot + reset() param; ally lasers target
-#     enemy aliens rather than the ship
-#   - ENEMY_LASER_POOL: 20 → 32 to handle 3-way fractal ally/enemy fire
-
-ALIEN_SPRITE = [
-    "    ########       ",
-    "   ##########      ",
-    "  ## ## ## ##    # ",
-    " ### ## ## ## #### ",
-    "   # ## ## ## #  # ",
-    "################## ",
-    "   # ## ## ## #  # ",
-    " ### ## ## ## #### ",
-    "  ## ## ## ##    # ",
-    "   ##########      ",
-    "    ########       "
-]
-
-ALIEN_LINES = []
-for _y, row in enumerate(ALIEN_SPRITE):
-    start = -1
-    for _x, char in enumerate(row):
-        if char == '#' and start == -1:
-            start = _x
-        elif char != '#' and start != -1:
-            ALIEN_LINES.append((start - 9, _y - 5, _x - 1 - 9))
-            start = -1
-    if start != -1:
-        ALIEN_LINES.append((start - 9, _y - 5, len(row) - 1 - 9))
-
-# Harvest RAM: Delete sprite source strings after conversion
-del ALIEN_SPRITE
-import gc; gc.collect()
-
-# ---------------------------------------------------------------------------
-# Entity classes
-# ---------------------------------------------------------------------------
+# v2.1 2026-04-11 Chaotic attractor integration:
+#   - Alien: added slots for attractor state (ax, ay, az), parameters (ap1, ap2, ap3), 
+#     motion type (a_type: 0=Bezier, 1=Lorenz, 2=Rossler), and screen mapping (a_scale, a_offx, a_offy).
+#   - Alien.update(): added branches for lorenz/rossler numerical integration.
+#   - Alien.reset(): added support for chaotic initialization.
 
 class Alien:
     __slots__ = ('p0x', 'p0y', 'p1x', 'p1y', 'p2x', 'p2y', 't', 'speed', 'active', 'x', 'y', 'target',
@@ -56,8 +17,13 @@ class Alien:
                  # Ally system
                  'is_ally',
                  # ox/oy always 0 — lets allies use other Aliens as homing targets
-                 # (Alien.update reads target.ox / target.oy, same interface as Ship)
-                 'ox', 'oy')
+                 'ox', 'oy',
+                 # Chaotic Attractor state
+                 'a_type',    # 0=Bezier/Homing, 1=Lorenz, 2=Rossler
+                 'ax', 'ay', 'az', # Trajectory position in attractor phase space
+                 'ap1', 'ap2', 'ap3', # Parameters (sigma/rho/beta or a/b/c)
+                 'a_scale',   # Scaling phase space coords to pixels
+                 'a_offx', 'a_offy') # World offset for attractor center
 
     def __init__(self):
         self.active = False
@@ -79,9 +45,14 @@ class Alien:
         self.is_ally = False
         # Always zero — satisfies target.ox / target.oy reads in Alien.update()
         self.ox = 0; self.oy = 0
+        # Chaos defaults (0 is standard Bezier mode)
+        self.a_type = 0; self.ax = 0.0; self.ay = 0.0; self.az = 0.0
+        self.ap1 = 0.0; self.ap2 = 0.0; self.ap3 = 0.0
+        self.a_scale = 1.0; self.a_offx = 0.0; self.a_offy = 0.0
 
     def reset(self, p0x, p0y, p1x, p1y, p2x, p2y, speed, target=None, is_boss=False, move_speed=1.8, hp=1,
-              fire_rate_mul=1.0, proj_speed=10.0, spread_scale=1.0):
+              fire_rate_mul=1.0, proj_speed=10.0, spread_scale=1.0, 
+              a_type=0, ax=0.0, ay=0.0, az=0.0, ap1=0.0, ap2=0.0, ap3=0.0, a_scale=5.0):
         self.p0x = p0x; self.p0y = p0y; self.p1x = p1x; self.p1y = p1y; self.p2x = p2x; self.p2y = p2y
         self.t = 0; self.speed = speed
         self.x = float(p0x); self.y = float(p0y)
@@ -96,38 +67,60 @@ class Alien:
         self.survival_frames = 0
         self.direct_hits    = 0
         self.is_ally        = False   # defection never carries over across respawns
+        # Initialize Chaotic Motion if a_type > 0
+        self.a_type = a_type; self.ax = ax; self.ay = ay; self.az = az
+        self.ap1 = ap1; self.ap2 = ap2; self.ap3 = ap3
+        self.a_scale = a_scale; self.a_offx = float(p0x); self.a_offy = float(p0y)
 
     @micropython.native
     def update(self):
         self.survival_frames = self.survival_frames + 1
         t = self.t + self.speed
         self.t = t
-        target = self.target
-        if target:
-            if t > 400:
-                self.active = False
+        
+        # MOTION TYPE BRANCHING
+        if self.a_type == 1: # LORENZ CHAOS
+            # Update internal phase space coords via utils.lorenz_step (Viper)
+            self.ax, self.ay, self.az = lorenz_step(self.ax, self.ay, self.az, self.ap1, self.ap2, self.ap3, 0.01)
+            # Map phase-space X/Y directly to screen pixels
+            self.x = self.a_offx + self.ax * self.a_scale
+            self.y = self.a_offy + self.ay * self.a_scale
+            if t > 600: self.active = False
+        elif self.a_type == 2: # ROSSLER CHAOS
+            # Update internal phase space coords via utils.rossler_step (Viper)
+            self.ax, self.ay, self.az = rossler_step(self.ax, self.ay, self.az, self.ap1, self.ap2, self.ap3, 0.05)
+            # Map phase-space X/Y directly to screen pixels
+            self.x = self.a_offx + self.ax * self.a_scale
+            self.y = self.a_offy + self.ay * self.a_scale
+            if t > 600: self.active = False
+        else: # STANDARD (BEZIER OR HOMING)
+            target = self.target
+            if target:
+                if t > 400:
+                    self.active = False
+                else:
+                    ax, ay = self.x, self.y
+                    tx, ty = target.x + target.ox, target.y + target.oy
+                    if self.is_boss:
+                        # Ring formation: p1x/p1y hold the spawn offset from ring centre.
+                        # Scale decays 1.0→0 over 160 frames, keeping angular separation
+                        # while the ring contracts onto the ship.
+                        ring_scale = max(0.0, (160.0 - t) / 160.0)
+                        tx += self.p1x * ring_scale
+                        ty += self.p1y * ring_scale
+                    dx, dy = tx - ax, ty - ay
+                    dist = math.sqrt(dx*dx + dy*dy)
+                    if dist > 0:
+                        ms = self.move_speed
+                        self.x = ax + (dx / dist) * ms
+                        self.y = ay + (dy / dist) * ms
             else:
-                ax, ay = self.x, self.y
-                tx, ty = target.x + target.ox, target.y + target.oy
-                if self.is_boss:
-                    # Ring formation: p1x/p1y hold the spawn offset from ring centre.
-                    # Scale decays 1.0→0 over 160 frames, keeping angular separation
-                    # while the ring contracts onto the ship.
-                    ring_scale = max(0.0, (160.0 - t) / 160.0)
-                    tx += self.p1x * ring_scale
-                    ty += self.p1y * ring_scale
-                dx, dy = tx - ax, ty - ay
-                dist = math.sqrt(dx*dx + dy*dy)
-                if dist > 0:
-                    ms = self.move_speed
-                    self.x = ax + (dx / dist) * ms
-                    self.y = ay + (dy / dist) * ms
-        else:
-            if t > 256:
-                self.active = False
-            else:
-                self.x = get_bezier_point(t, self.p0x, self.p1x, self.p2x)
-                self.y = get_bezier_point(t, self.p0y, self.p1y, self.p2y)
+                if t > 256:
+                    self.active = False
+                else:
+                    # Quadratic Bezier spline movement
+                    self.x = get_bezier_point(t, self.p0x, self.p1x, self.p2x)
+                    self.y = get_bezier_point(t, self.p0y, self.p1y, self.p2y)
 
     def draw(self, display, body_pen, glow_pen):
         cx = int(self.x); cy = int(self.y)
