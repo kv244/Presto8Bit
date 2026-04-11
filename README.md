@@ -77,6 +77,13 @@ To maintain high FPS on the RP2350, critical path routines use specialized emitt
 *   **Targeted GC Windows:** `gc.collect()` is called at two high-value moments—immediately when a boss swarm is defeated (reclaiming all 16 alien objects at once) and at the start of each game reset (before new `Environment`/`Ship` objects are allocated), minimising peak heap pressure.
 *   **`__slots__` on All Entity Classes:** `Alien`, `Laser`, `EnemyLaser`, `Particle`, and `Game` all declare `__slots__`, eliminating per-instance `__dict__` overhead and ensuring strict attribute safety on MicroPython.
 
+### 4. High-Coverage Module Hardening
+The core game engine (`dandare.py`, `entities.py`, `environment.py`, `ship.py`) is architected to prevent frame-time "stutter" and garbage collection (GC) freezes:
+*   **Object Pooling & Pre-allocation:** 100% of high-frequency objects (aliens, lasers, rain, particles) are pulled from pre-allocated pools. No new instances are created during the active game loop, preventing heap fragmentation.
+*   **Throttled System Tasks:** Expensive operations like RTC checks and mandatory `gc.collect()` cycles are throttled to specific frame intervals (e.g., every 500 or 60 frames) to distribute load.
+*   **Static Pen Caching:** All 25+ display pens are created once during class initialization. Drawing loops exclusively use these cached references, avoiding the multi-millisecond overhead of `create_pen()` during rendering.
+*   **Decorator Strategy:** Performance-critical methods use `@micropython.native` (for complex branching/logic) and `@micropython.viper` (for fixed-point math and raw memory access) to achieve near-C speeds on the RP2350.
+
 ## 🏆 Achievements
 
 Nine persistent achievements are tracked in `achievements.json` and survive across sessions. A gold notification banner appears for ~3 seconds on unlock. The current count is shown in the bottom-right corner of the HUD.
