@@ -8,6 +8,16 @@ A high-performance, object-oriented 2D space shooter engine for the **Pimoroni P
 |:---:|:---:|
 | ![Daytime gameplay showing ship, aliens, clouds and parallax cityscape](i1.jpg) | ![Sunset phase with scanline dimmer effect and city silhouette](i2.jpg) |
 
+## 🧬 v2 — Adaptive Enemies, Fractal Fire & Defection (2026-04-11)
+
+Three new gameplay systems were added in this release:
+
+*   **Genetic Algorithm (Enemy Evolution):** Every alien now carries a 6-gene genome (`speed`, `move_speed`, `hp`, `fire_rate_mul`, `proj_speed`, `spread_scale`). On death, its fitness score (`survival_frames + direct_hits×100`) is recorded in an 8-slot gene pool. 60% of new spawns are bred via single-point crossover and per-gene mutation — enemies literally evolve to be harder over time.
+*   **Fractal Bullet Spreads:** All bullet patterns now use a golden-ratio (φ=0.618) self-similar angle tree, pre-computed at module load. The player's hero spread fires 7 projectiles, the standard spread fires 3-way, and enemy return fire also uses a 3-way fractal fan — all rotation-matrix aligned to the actual target direction.
+*   **Enemy Defection (Ally System):** Non-boss aliens have a 0.02%/frame chance to switch sides. A defected alien turns cyan, homes toward the nearest enemy, fires a 3-way fractal spread at it, and body-rams enemies for bonus score. Up to 6 allies can be active at once.
+
+---
+
 ## 🌟 Game Features & Mechanics
 
 *   **Dynamic Threat Scaling:** The game starts with a baseline difficulty, but passing 300 points triggers a progressive spawn rate scaler. Surviving past 900 points unleashes an absolute bullet hell (~30% chance for an alien ship every frame).
